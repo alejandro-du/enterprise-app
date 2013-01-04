@@ -1,0 +1,4 @@
+This software contains third party software. You must accept Aditional Terms and Conditions
+for third party components included within this software, including, but not limited to:
+
+1. HbnContainer (http://vaadin.com/addon/hbncontainer)
