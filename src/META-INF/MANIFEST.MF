@@ -1,0 +1,7 @@
+Manifest-Version: 1.0
+Implementation-Vendor: Alejandro Duarte
+Implementation-Title: enterprise-app
+Implementation-Version: 0.3.4
+Vaadin-Package-Version: 1
+Sealed: true
+
