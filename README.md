@@ -3,12 +3,10 @@ Enterprise App
 
 A powerful Vaadin add-on to create web applications that integrate Vaadin, Hibernate, JasperReports and Quartz technologies.
 
-Licence
+License
 =======
 
-Note that enterprise-app is dual-licensed.
-
-Enterprise App is available under the terms of the GNU Affero General Public License (AGPL) V3, and also via a special
+Enterprise App is dual-licensed: It is Available under the terms of the GNU Affero General Public License (AGPL) V3, and also via a special
 agreement.
  
  - See license.txt for the AGPL terms.
