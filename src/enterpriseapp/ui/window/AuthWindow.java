@@ -1,6 +1,5 @@
 package enterpriseapp.ui.window;
 
-
 import com.vaadin.data.Validator.InvalidValueException;
 import com.vaadin.event.FieldEvents;
 import com.vaadin.event.FieldEvents.FocusEvent;
@@ -19,6 +18,12 @@ import com.vaadin.ui.Window;
 
 import enterpriseapp.ui.Constants;
 
+/**
+ * A helper Vaadin Window to make custom authentication windows.
+ * 
+ * @author Alejandro Duarte
+ *
+ */
 public abstract class AuthWindow extends Window implements Button.ClickListener {
 
 	private static final long serialVersionUID = 1L;
@@ -40,6 +45,9 @@ public abstract class AuthWindow extends Window implements Button.ClickListener 
 		initLayout();
 	}
 	
+	/**
+	 * Override this to provide your own functionality.
+	 */
 	public abstract void buttonClicked();
 	
 	protected void initLayout() {
