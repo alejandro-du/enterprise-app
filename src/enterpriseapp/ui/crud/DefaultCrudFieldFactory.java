@@ -14,6 +14,8 @@ import java.util.Set;
 import javax.persistence.Column;
 import javax.persistence.JoinColumn;
 
+import org.hibernate.annotations.Type;
+
 import com.vaadin.data.Container;
 import com.vaadin.data.Item;
 import com.vaadin.data.util.BeanItem;
@@ -77,11 +79,12 @@ public class DefaultCrudFieldFactory extends DefaultFieldFactory {
 	 * @param crudFieldAnnotation CrudFieldAnnotation annotation (if present).
 	 * @param columnAnnotation ColumnAnnotation annotation (if present).
 	 * @param joinColumnAnnotation ColumnAnnotation annotation (if present).
+	 * @param typeAnnotation TypeAnnotation (if present)
 	 */
-	public void configureField(Field field, Object bean, Item item, String pid, Component uiContext, Class<?> propertyType, CrudField crudFieldAnnotation, Column columnAnnotation, JoinColumn joinColumnAnnotation) {
+	public void configureField(Field field, Object bean, Item item, String pid, Component uiContext, Class<?> propertyType, CrudField crudFieldAnnotation, Column columnAnnotation, JoinColumn joinColumnAnnotation, Type typeAnnotation) {
 		field.setCaption(getFieldCaption(pid, bean.getClass()));
 		checkRequired(field, crudFieldAnnotation, columnAnnotation, joinColumnAnnotation);
-		checkLength(field, columnAnnotation);
+		checkLength(field, columnAnnotation, typeAnnotation);
 		checkNullRepresentation(field);
 		addValidators(field, bean, item, pid, uiContext, propertyType, crudFieldAnnotation);
 		field.setWidth("100%");
@@ -102,10 +105,12 @@ public class DefaultCrudFieldFactory extends DefaultFieldFactory {
 			Object bean = beanItem.getBean();
 			Class<?> propertyType = bean.getClass().getDeclaredField(propertyId.toString()).getType();
 			
-			CrudField crudFieldAnnotation = bean.getClass().getDeclaredField(pid).getAnnotation(CrudField.class);
-			Column columnAnnotation = bean.getClass().getDeclaredField(pid).getAnnotation(Column.class);
-			JoinColumn joinColumnAnnotation = bean.getClass().getDeclaredField(pid).getAnnotation(JoinColumn.class);
-			Downloadable downloadableAnnotation = bean.getClass().getDeclaredField(pid).getAnnotation(Downloadable.class);
+			java.lang.reflect.Field declaredField = bean.getClass().getDeclaredField(pid);
+			CrudField crudFieldAnnotation = declaredField.getAnnotation(CrudField.class);
+			Column columnAnnotation = declaredField.getAnnotation(Column.class);
+			JoinColumn joinColumnAnnotation = declaredField.getAnnotation(JoinColumn.class);
+			Downloadable downloadableAnnotation = declaredField.getAnnotation(Downloadable.class);
+			Type typeAnnotation = declaredField.getAnnotation(Type.class);
 			
 			List<Object> visibleProperties = null;
 			boolean propertiesDefined = false;
@@ -162,7 +167,7 @@ public class DefaultCrudFieldFactory extends DefaultFieldFactory {
 				field = super.createField(item, propertyId, uiContext);
 			}
 			
-			configureField(field, bean, item, pid, uiContext, propertyType, crudFieldAnnotation, columnAnnotation, joinColumnAnnotation);
+			configureField(field, bean, item, pid, uiContext, propertyType, crudFieldAnnotation, columnAnnotation, joinColumnAnnotation, typeAnnotation);
 			
 		} catch (SecurityException e) {
 			throw new RuntimeException(e);
@@ -461,7 +466,8 @@ public class DefaultCrudFieldFactory extends DefaultFieldFactory {
 	 * @param field
 	 * @param columnAnnotation
 	 */
-	public void checkLength(Field field, Column columnAnnotation) {
+	public void checkLength(Field field, Column columnAnnotation, Type typeAnnotation) {
+		if(typeAnnotation != null && !"text".equals(typeAnnotation.type()))
 		if(AbstractTextField.class.isAssignableFrom(field.getClass())) {
 			if(columnAnnotation != null) {
 				field.addValidator(new StringLengthValidator(Constants.uiMaxLengthExceeded(columnAnnotation.length()), 0, columnAnnotation.length(), true));
