@@ -219,8 +219,15 @@ public class DefaultCrudFieldFactory extends DefaultFieldFactory {
 					bean = (Dto) ContainerFactory.getInstance().getContainer(bean.getClass()).getEntity((Serializable) dto.getId());
 				}
 				
+				String getterName;
+				
+				if(propertyType == boolean.class || propertyType == Boolean.class) {
+					getterName = "is" + propertyId.toString().substring(0, 1).toUpperCase() + propertyId.toString().substring(1, propertyId.toString().length());
+				} else {
+					getterName = "get" + propertyId.toString().substring(0, 1).toUpperCase() + propertyId.toString().substring(1, propertyId.toString().length());
+				}
+
 				Class<?> clazz = (Class)((ParameterizedType)(bean).getClass().getDeclaredField(propertyId.toString()).getGenericType()).getActualTypeArguments()[0];
-				String getterName = "get" + propertyId.toString().substring(0, 1).toUpperCase() + propertyId.toString().substring(1, propertyId.toString().length());
 				Collection set = (Collection) bean.getClass().getMethod(getterName).invoke(bean);
 				field = new EntityTable(clazz, set, new EmbeddedCrudComponent(clazz));
 				

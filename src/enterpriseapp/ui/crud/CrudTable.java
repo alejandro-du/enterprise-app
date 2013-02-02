@@ -176,8 +176,16 @@ public class CrudTable<T extends Dto> extends Table implements FieldContainer {
 				}
 				
 				String propertyName = colId.toString();
+				
+				Class<?> clazz = type.getDeclaredField(propertyName).getType();
 				String capitalizedPropertyName = propertyName.substring(0, 1).toUpperCase() + propertyName.substring(1, propertyName.length());
-				String propertyGetterName = "get" + capitalizedPropertyName;
+				String propertyGetterName;
+				
+				if(clazz == boolean.class || clazz == Boolean.class) {
+					propertyGetterName = "is" + capitalizedPropertyName;
+				} else {
+					propertyGetterName = "get" + capitalizedPropertyName;
+				}
 				
 				CrudField crudFieldAnnotation = type.getDeclaredField(propertyName).getAnnotation(CrudField.class);
 				Method propertyGetter = type.getMethod(propertyGetterName, (Class<?>[]) null);
