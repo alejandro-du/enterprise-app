@@ -67,13 +67,11 @@ import com.vaadin.ui.Panel;
 import com.vaadin.ui.TextField;
 import com.vaadin.ui.VerticalLayout;
 import com.vaadin.ui.themes.BaseTheme;
-import com.vaadin.ui.themes.Reindeer;
 
 import enterpriseapp.Utils;
 import enterpriseapp.ui.Constants;
 
 /**
- * Extend this template class to create custom reports.
  * @author Alejandro Duarte
  *
  */
@@ -82,8 +80,7 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 	private static final long serialVersionUID = 1L;
 	
 	protected HorizontalSplitPanel layout;
-	protected VerticalLayout htmlLayout = new VerticalLayout();
-	protected Label htmlLabel;
+	protected VerticalLayout leftLayout = new VerticalLayout();
 	protected HorizontalLayout displayLayout;
 	protected Button refreshButton;
 	protected PopupButton columnsButton;
@@ -114,8 +111,6 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 	protected CheckBox[] groupingCheckBoxes;
 	protected VerticalLayout observationsLayout;
 	protected Label observationsLabel;
-
-
 	
 	public AbstractReport() { }
 	
@@ -126,6 +121,8 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 		build();
 	}
 
+	public abstract void updateReport() throws UnsupportedEncodingException;
+	
 	/**
 	 * @return property names that correspond to the objects returned by getData(). Each instance returned by
 	 * getData() must have a getter for each property returned by this method.
@@ -297,8 +294,8 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 		try {
 			refreshButton.setComponentError(null);
 			setObservations("");
-			layout.setFirstComponent(htmlLayout);
-			htmlLabel.setValue(getOutputStream(getHtmlExporter()).toString("UTF-8"));
+			layout.setFirstComponent(leftLayout);
+			updateReport();
 			
 			if(!getObservations().isEmpty()) {
 				refreshButton.setComponentError(new UserError(Constants.uiSeeObservationsOnTheReport));
@@ -308,7 +305,7 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 			throw new RuntimeException(e);
 		}
 	}
-	
+
 	protected ByteArrayOutputStream getOutputStream(JRExporter exporter) {
 		ByteArrayOutputStream outputStream = null;
 		
@@ -342,16 +339,6 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 	}
 
 	public void initLayout() {
-		htmlLabel = new Label("", Label.CONTENT_XHTML);
-		htmlLabel.setStyleName(Reindeer.LAYOUT_WHITE);
-		htmlLabel.setSizeUndefined();
-		
-		htmlLayout.setMargin(true);
-		htmlLayout.setStyleName(Reindeer.LAYOUT_BLACK);
-		htmlLayout.addStyleName("report-background");
-		htmlLayout.addComponent(htmlLabel);
-		htmlLayout.setComponentAlignment(htmlLabel, Alignment.TOP_CENTER);
-		
 		refreshButton = new Button(Constants.uiRefresh);
 		pdfButton = new Button(Constants.uiPdf);
 		excelButton = new Button(Constants.uiExcel);
