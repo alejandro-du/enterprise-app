@@ -23,19 +23,18 @@ public abstract class TableViewReport extends AbstractReport {
 		
 		table.setSizeFull();
 		table.setImmediate(true);
-		table.setColumnCollapsingAllowed(true);
 		table.setSelectable(true);
+		table.setColumnCollapsingAllowed(true);
 		
 		leftLayout.setSizeFull();
 		leftLayout.addComponent(table);
 		
-		columnsButton.setVisible(false);
 		groupingButton.setVisible(false);
 	}
 	
 	@Override
 	public void updateReport() {
-		table.removeAllItems();
+		table.setContainerDataSource(null);
 		
 		String[] columnProperties = getColumnProperties();
 		Class<?>[] columnClasses = getColumnClasses();
@@ -43,6 +42,12 @@ public abstract class TableViewReport extends AbstractReport {
 		
 		for(int i = 0; i < columnProperties.length; i++) {
 			table.addContainerProperty(columnProperties[i], columnClasses[i], null, columnTitles[i], null, null);
+		}
+		
+		for(int i = 0; i < columnProperties.length; i++) {
+			if(!columnsCheckBoxes[i].booleanValue()) {
+				table.setColumnCollapsed(columnProperties[i], true);
+			}
 		}
 		
 		Collection<?> data = getData();
