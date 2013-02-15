@@ -112,6 +112,8 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 	protected VerticalLayout observationsLayout;
 	protected Label observationsLabel;
 	
+	protected boolean showObservations = false;
+	
 	public AbstractReport() { }
 	
 	@Override
@@ -509,9 +511,11 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 		
 		observationsLabel = new Label("", Label.CONTENT_XHTML);
 		
-		observationsLayout = new VerticalLayout();
-		observationsLayout.setMargin(true);
-		observationsLayout.addComponent(observationsLabel);
+		if(showObservations) {
+			observationsLayout = new VerticalLayout();
+			observationsLayout.setMargin(true);
+			observationsLayout.addComponent(observationsLabel);
+		}
 		
 		accordion = new Accordion();
 		accordion.setSizeFull();
