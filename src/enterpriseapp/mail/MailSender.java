@@ -5,6 +5,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Properties;
 
+import javax.activation.DataHandler;
 import javax.mail.Message;
 import javax.mail.PasswordAuthentication;
 import javax.mail.Session;
@@ -44,6 +45,19 @@ public class MailSender {
 	 * @throws javax.mail.MessagingException
 	 */
 	public static void send(Collection<String> recipients, String subject, String message) throws javax.mail.MessagingException {
+		send(recipients, subject, message, null, null);
+	}
+	
+	/**
+	 * Sends an email to multiple recipients.
+	 * @param recipients Collection of destination emails.
+	 * @param subject Subject of the message.
+	 * @param message Text of the message to send.
+	 * @param dataHandler DataHandler used to atthach a file.
+	 * @param fileName Name of the file.
+	 * @throws javax.mail.MessagingException
+	 */
+	public static void send(Collection<String> recipients, String subject, String message, DataHandler dataHandler, String fileName) throws javax.mail.MessagingException {
         Properties props = new Properties();
         props.put("mail.smtp.host", Constants.mailSmtpHost);
         props.put("mail.smtp.auth", "true");
@@ -83,6 +97,10 @@ public class MailSender {
         msg.setSubject(subject);
         msg.setContent(Utils.replaceHtmlSpecialCharacters(message), "text/html");
         msg.setHeader("Content-Type", "text/html; charset=\"utf-8\"");
+        
+        msg.setDataHandler(dataHandler);
+        msg.setFileName(fileName);
+        
         Transport.send(msg);
 	}
 
