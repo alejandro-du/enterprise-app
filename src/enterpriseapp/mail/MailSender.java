@@ -98,8 +98,10 @@ public class MailSender {
         msg.setContent(Utils.replaceHtmlSpecialCharacters(message), "text/html");
         msg.setHeader("Content-Type", "text/html; charset=\"utf-8\"");
         
-        msg.setDataHandler(dataHandler);
-        msg.setFileName(fileName);
+        if(dataHandler != null) {
+        	msg.setDataHandler(dataHandler);
+        	msg.setFileName(fileName);
+        }
         
         Transport.send(msg);
 	}
