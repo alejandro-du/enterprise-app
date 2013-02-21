@@ -52,15 +52,17 @@ public abstract class TableViewReport extends AbstractReport {
 		
 		Collection<?> data = getData();
 		
-		for(Object row : data) {
-			BasicDynaBean bean = (BasicDynaBean) row;
-			Object[] cells = new Object[columnProperties.length];
-			
-			for(int i = 0; i < columnProperties.length; i++) {
-				cells[i] = bean.get(columnProperties[i]);
+		if(data != null) {
+			for(Object row : data) {
+				BasicDynaBean bean = (BasicDynaBean) row;
+				Object[] cells = new Object[columnProperties.length];
+				
+				for(int i = 0; i < columnProperties.length; i++) {
+					cells[i] = bean.get(columnProperties[i]);
+				}
+				
+				table.addItem(cells, row);
 			}
-			
-			table.addItem(cells, row);
 		}
 	}
 
