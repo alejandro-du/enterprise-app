@@ -1,7 +1,8 @@
 Manifest-Version: 1.0
 Implementation-Vendor: Alejandro Duarte
 Implementation-Title: enterprise-app
-Implementation-Version: 0.3.4
+Implementation-Version: 0.4.0
 Vaadin-Package-Version: 1
 Sealed: true
+Vaadin-Addon: enterprise-app-0.4.0.jar
 
