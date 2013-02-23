@@ -24,7 +24,6 @@ public abstract class PrintViewReport extends AbstractReport {
 		htmlLabel.setStyleName(Reindeer.LAYOUT_WHITE);
 		htmlLabel.setSizeUndefined();
 		
-		leftLayout.setMargin(true);
 		leftLayout.setStyleName(Reindeer.LAYOUT_BLACK);
 		leftLayout.addStyleName("report-background");
 		leftLayout.addComponent(htmlLabel);

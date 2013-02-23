@@ -296,6 +296,7 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 		try {
 			refreshButton.setComponentError(null);
 			setObservations("");
+			leftLayout.setMargin(true);
 			layout.setFirstComponent(leftLayout);
 			updateReport();
 			
