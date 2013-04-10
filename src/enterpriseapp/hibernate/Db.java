@@ -13,7 +13,6 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Enumeration;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -21,11 +20,10 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
-import javax.persistence.Persistence;
-
 import org.hibernate.HibernateException;
 import org.hibernate.Session;
-import org.hibernate.ejb.HibernateEntityManagerFactory;
+import org.hibernate.SessionFactory;
+import org.hibernate.cfg.Configuration;
 import org.hibernate.metadata.ClassMetadata;
 import org.hibernate.persister.collection.AbstractCollectionPersister;
 import org.hibernate.persister.entity.AbstractEntityPersister;
@@ -45,70 +43,35 @@ import enterpriseapp.ui.Constants;
 public class Db {
 	
 	private static Logger logger = LoggerFactory.getLogger(Db.class);
-	private static ArrayList<HibernateEntityManagerFactory> entityManagerFactoryList = new ArrayList<HibernateEntityManagerFactory>();
+	private static ArrayList<SessionFactory> sessionFactoryList = new ArrayList<SessionFactory>();
 	
 	private Db() { }
 	
 	/**
-	 * Configures Hibernate from properties file.
-	 * @return Properties map.
-	 */
-	public static HashMap<String, String> getPropertiesFromFile() {
-		HashMap<String, String> properties = new HashMap<String, String>();
-		
-		properties.put("javax.persistence.jdbc.driver", Constants.dbDriver());
-		properties.put("javax.persistence.jdbc.url", Constants.dbUrl());
-		properties.put("javax.persistence.jdbc.user", Constants.dbUser());
-		properties.put("javax.persistence.jdbc.password", Constants.dbPassword());
-		properties.put("hibernate.dialect", Constants.dbDialect());
-		properties.put("hibernate.show_sql", Constants.dbShowSQL());
-		properties.put("hibernate.hbm2ddl.auto", Constants.dbSchemaGeneration());
-		properties.put("hibernate.c3p0.min_size", Constants.dbMinSize());
-		properties.put("hibernate.c3p0.max_size", Constants.dbMaxSize());
-		properties.put("hibernate.c3p0.timeout", Constants.dbPoolTimeout());
-		properties.put("hibernate.c3p0.max_statements", Constants.dbMaxStatements());
-		properties.put("hibernate.c3p0.validationQuery", Constants.dbPoolValidationQuery());
-		properties.put("hibernate.current_session_context_class", "org.hibernate.context.ThreadLocalSessionContext");
-		
-		if(Constants.dbInterceptor() != null) {
-			properties.put("hibernate.ejb.interceptor", Constants.dbInterceptor());
-		}
-		
-		return properties;
-	}
-	
-	/**
 	 * Inits the database using the properties file.
-	 * @param persistenceUnit
 	 */
-	public static void initFromPropertiesFile(String persistenceUnit) {
-		logger.info("Initializing persistence unit " + persistenceUnit);
-		
+	public static void initFromPropertiesFile() {
     	if(Constants.dbUseCloudFoundryDatabase) {
     		configureDbFromCloudFoundry();
     	}
 		
-		addNewEntityManagerFactory(persistenceUnit, getPropertiesFromFile());
+		addNewSessionFactory();
 	}
 	
 	/**
 	 * Inits the database.
-	 * @param persistenceUnit Persistence unit.
-	 * @param properties Properties to use for Hibernate configuration.
 	 */
-	public static void init(String persistenceUnit, HashMap<String, String> properties) {
-		logger.info("Initializing persistence unit " + persistenceUnit);
-		
+	public static void init() {
     	if(Constants.dbUseCloudFoundryDatabase) {
     		logger.info("Configuring database from Cloud Foundry");
     		configureDbFromCloudFoundry();
     	}
     	
-		if(entityManagerFactoryList.isEmpty()) {
+		if(sessionFactoryList.isEmpty()) {
 			throw new RuntimeException("No default database set. You must first initialize a default database.");
 			
 		} else {
-			addNewEntityManagerFactory(persistenceUnit, properties);
+			addNewSessionFactory();
 		}
 	}
 	
@@ -127,8 +90,8 @@ public class Db {
 	public static void close() {
 		logger.info("Closing database...");
 		
-		if(!entityManagerFactoryList.isEmpty()) {
-			entityManagerFactoryList.get(0).close();
+		if(!sessionFactoryList.isEmpty()) {
+			sessionFactoryList.get(0).close();
 			logger.info("Database closed");
 		}
 	}
@@ -137,12 +100,39 @@ public class Db {
 	 * @return the current Hibernate session.
 	 */
 	public static Session getCurrentSession() {
-		return entityManagerFactoryList.get(0).getSessionFactory().getCurrentSession();
+		return sessionFactoryList.get(0).getCurrentSession();
 	}
 	
-	protected static void addNewEntityManagerFactory(String persistenceUnit, HashMap<String, String> properties) {
+	protected static void addNewSessionFactory() {
 		try {
-			entityManagerFactoryList.add((HibernateEntityManagerFactory) Persistence.createEntityManagerFactory(persistenceUnit, properties));
+			Configuration configuration = new Configuration();
+			configuration.setProperty("hibernate.connection.driver_class", Constants.dbDriver());
+			configuration.setProperty("hibernate.connection.url", Constants.dbUrl());
+			configuration.setProperty("hibernate.connection.username", Constants.dbUser());
+			configuration.setProperty("hibernate.connection.password", Constants.dbPassword());
+			configuration.setProperty("hibernate.dialect", Constants.dbDialect());
+			configuration.setProperty("hibernate.show_sql", Constants.dbShowSQL());
+			configuration.setProperty("hibernate.hbm2ddl.auto", Constants.dbSchemaGeneration());
+			configuration.setProperty("hibernate.c3p0.min_size", Constants.dbMinSize());
+			configuration.setProperty("hibernate.c3p0.max_size", Constants.dbMaxSize());
+			configuration.setProperty("hibernate.c3p0.timeout", Constants.dbPoolTimeout());
+			configuration.setProperty("hibernate.c3p0.max_statements", Constants.dbMaxStatements());
+			configuration.setProperty("hibernate.c3p0.validationQuery", Constants.dbPoolValidationQuery());
+			configuration.setProperty("hibernate.current_session_context_class", "org.hibernate.context.ThreadLocalSessionContext");
+			
+			if(Constants.dbInterceptor() != null) {
+				configuration.setProperty("hibernate.ejb.interceptor", Constants.dbInterceptor());
+			}
+			
+			String[] mappingFiles = Constants.dbMappingFiles().replace(" ", "").split(",");
+			
+			for(int i = 0; i < mappingFiles.length; i++) {
+				configuration.addResource(mappingFiles[i]);
+			}
+			
+			SessionFactory sessionFactory = configuration.configure().buildSessionFactory();
+			
+			sessionFactoryList.add(sessionFactory);
 			
 		} catch(Exception e) {
 			throw new RuntimeException(e);
@@ -150,7 +140,7 @@ public class Db {
 	}
 	
 	public static boolean isInitialized() {
-		return entityManagerFactoryList != null && !entityManagerFactoryList.isEmpty();
+		return sessionFactoryList != null && !sessionFactoryList.isEmpty();
 	}
 	
 	/**
@@ -193,7 +183,7 @@ public class Db {
 	}
 	
 	public static Map<String, ClassMetadata> getAllClassMetadata() {
-		return entityManagerFactoryList.get(0).getSessionFactory().getAllClassMetadata();
+		return sessionFactoryList.get(0).getAllClassMetadata();
 	}
 
 	/**
@@ -203,8 +193,8 @@ public class Db {
 	public static List<String> getAllTableNames() {
 		HashSet<String> tables = new HashSet<String>();
 		
-		Map<String, ClassMetadata> allClassMetadata = entityManagerFactoryList.get(0).getSessionFactory().getAllClassMetadata();
-		Map allCollectionMetadata = entityManagerFactoryList.get(0).getSessionFactory().getAllCollectionMetadata();
+		Map<String, ClassMetadata> allClassMetadata = sessionFactoryList.get(0).getAllClassMetadata();
+		Map allCollectionMetadata = sessionFactoryList.get(0).getAllCollectionMetadata();
 		
 		for(String key : allClassMetadata.keySet()) {
 			ClassMetadata classMetadata = allClassMetadata.get(key);

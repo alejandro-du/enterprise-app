@@ -19,6 +19,7 @@ public abstract class Constants {
 	public static final String dbMaxStatements() { return Utils.getProperty("db.pool.max_statements"); }
 	public static final String dbPoolValidationQuery() { return Utils.getProperty("db.pool.validationQuery"); }
 	public static final String dbInterceptor() { return Utils.getProperty("db.interceptor"); }
+	public static final String dbMappingFiles() { return Utils.getProperty("db.mappingFiles"); }
 	
 	public static final String mailSmtpHost = Utils.getProperty("mail.smtp.host");
 	public static final String mailSmtpPort = Utils.getProperty("mail.smtp.port");

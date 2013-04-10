@@ -88,11 +88,7 @@ public class DefaultContextListener implements ServletContextListener {
 	 * Override this method to provide your custom database configuration.
 	 */
 	protected void initDatabase() {
-		if(Constants.dbPersistenceUnit() != null) {
-			Db.initFromPropertiesFile(Constants.dbPersistenceUnit());
-		} else {
-			logger.warn("No persistence unit configured. You can specify one in your configuration.properties file (see defaultConfiguration.properties)");
-		}
+		Db.initFromPropertiesFile();
 	}
 
 	/**

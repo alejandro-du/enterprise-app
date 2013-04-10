@@ -291,12 +291,12 @@ public class HqlQueryBrowser extends CustomComponent implements ClickListener, I
 	
 	protected void addRow(Map<?, ?> row) {
 		Object[] cells = new Object[row.size()];
-		int i = 0;
+		int i = row.entrySet().size() - 1;
 		
 		for(Entry<?, ?> entry : row.entrySet()) {
 			table.addContainerProperty(entry.getKey(), Object.class, null);
 			cells[i] = entry.getValue();
-			i++;
+			i--;
 		}
 		
 		table.addItem(cells, row);
