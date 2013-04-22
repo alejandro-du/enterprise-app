@@ -21,6 +21,7 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
 import org.hibernate.HibernateException;
+import org.hibernate.Interceptor;
 import org.hibernate.Session;
 import org.hibernate.SessionFactory;
 import org.hibernate.cfg.Configuration;
@@ -121,7 +122,8 @@ public class Db {
 			configuration.setProperty("hibernate.current_session_context_class", "org.hibernate.context.ThreadLocalSessionContext");
 			
 			if(Constants.dbInterceptor() != null) {
-				configuration.setProperty("hibernate.ejb.interceptor", Constants.dbInterceptor());
+				Interceptor interceptor = (Interceptor) Class.forName(Constants.dbInterceptor()).newInstance();
+				configuration.setInterceptor(interceptor);
 			}
 			
 			String[] mappingFiles = Constants.dbMappingFiles().replace(" ", "").split(",");
