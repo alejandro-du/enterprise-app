@@ -1,17 +1,20 @@
 package enterpriseapp.mail;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Properties;
 
-import javax.activation.DataHandler;
 import javax.mail.Message;
+import javax.mail.Multipart;
 import javax.mail.PasswordAuthentication;
 import javax.mail.Session;
 import javax.mail.Transport;
 import javax.mail.internet.InternetAddress;
+import javax.mail.internet.MimeBodyPart;
 import javax.mail.internet.MimeMessage;
+import javax.mail.internet.MimeMultipart;
 
 import enterpriseapp.Utils;
 import enterpriseapp.ui.Constants;
@@ -30,8 +33,9 @@ public class MailSender {
 	 * @param subject Subject of the message
 	 * @param message Text of the message to send.
 	 * @throws javax.mail.MessagingException
+	 * @throws IOException 
 	 */
-	public static void send(String recipient, String subject, String message) throws javax.mail.MessagingException {
+	public static void send(String recipient, String subject, String message) throws javax.mail.MessagingException, IOException {
 		List<String> recipients = new ArrayList<String>();
 		recipients.add(recipient);
 		send(recipients, subject, message);
@@ -43,9 +47,10 @@ public class MailSender {
 	 * @param subject Subject of the message.
 	 * @param message Text of the message to send.
 	 * @throws javax.mail.MessagingException
+	 * @throws IOException 
 	 */
-	public static void send(Collection<String> recipients, String subject, String message) throws javax.mail.MessagingException {
-		send(recipients, subject, message, null, null);
+	public static void send(Collection<String> recipients, String subject, String message) throws javax.mail.MessagingException, IOException {
+		send(recipients, subject, message, null, null, null);
 	}
 	
 	/**
@@ -56,8 +61,17 @@ public class MailSender {
 	 * @param dataHandler DataHandler used to atthach a file.
 	 * @param fileName Name of the file.
 	 * @throws javax.mail.MessagingException
+	 * @throws IOException 
 	 */
-	public static void send(Collection<String> recipients, String subject, String message, DataHandler dataHandler, String fileName) throws javax.mail.MessagingException {
+	public static void send(
+		Collection<String> recipients,
+		String subject,
+		String message,
+		byte[] attachment,
+		String attachmentMimeType,
+		String fileName
+	) throws javax.mail.MessagingException, IOException {
+		
         Properties props = new Properties();
         props.put("mail.smtp.host", Constants.mailSmtpHost);
         props.put("mail.smtp.auth", "true");
@@ -95,14 +109,23 @@ public class MailSender {
         msg.setRecipients(Message.RecipientType.TO, addressTo);
 
         msg.setSubject(subject);
-        msg.setContent(Utils.replaceHtmlSpecialCharacters(message), "text/html");
         msg.setHeader("Content-Type", "text/html; charset=\"utf-8\"");
         
-        if(dataHandler != null) {
-        	msg.setDataHandler(dataHandler);
-        	msg.setFileName(fileName);
+        MimeBodyPart messageBodyPart = new MimeBodyPart();
+		messageBodyPart.setContent(Utils.replaceHtmlSpecialCharacters(message), "text/html");
+        
+        Multipart multipart = new MimeMultipart();
+		multipart.addBodyPart(messageBodyPart);
+        
+        if(attachment != null) {
+        	MimeBodyPart attachPart = new MimeBodyPart();
+			attachPart.setContent(attachment, attachmentMimeType);
+			attachPart.setFileName(fileName);
+			
+			multipart.addBodyPart(attachPart);
         }
         
+        msg.setContent(multipart);
         Transport.send(msg);
 	}
 
