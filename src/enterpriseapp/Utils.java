@@ -506,4 +506,38 @@ public class Utils {
     	component.addComponent(spacer);
     }
 	
+    /**
+     * Returns the content of the given file.
+     * @throws IOException
+     */
+	public static String readFile(String path) throws IOException {
+		InputStream is = Thread.currentThread().getContextClassLoader().getResourceAsStream(path);
+
+		if (is == null) {
+			throw new FileNotFoundException("Can't find \"" + path + "\".");
+		}
+
+		BufferedReader br = null;
+		StringBuilder sb = new StringBuilder();
+
+		try {
+			String line;
+			br = new BufferedReader(new InputStreamReader(is));
+			
+			while ((line = br.readLine()) != null) {
+				sb.append(line + "\n");
+			}
+
+		} finally {
+			if (br != null) {
+				try {
+					br.close();
+				} catch (IOException e) {
+					throw new RuntimeException(e);
+				}
+			}
+		}
+
+		return sb.toString();
+	}
 }
