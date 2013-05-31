@@ -36,6 +36,10 @@ public class EnterpriseApplication extends Application implements HttpServletReq
 	protected static Scheduler scheduler;
 	
 	protected String timeZoneId = TimeZone.getDefault().getID();
+
+	private HttpServletRequest httpServletRequest;
+
+	private HttpServletResponse httpServletResponse;
 	
 	/**
 	 * Adds a default transaction listener.
@@ -87,6 +91,9 @@ public class EnterpriseApplication extends Application implements HttpServletReq
 	 */
 	@Override
 	public void onRequestStart(HttpServletRequest request, HttpServletResponse response) {
+		this.httpServletRequest = request;
+		this.httpServletResponse = response;
+		
 		EnterpriseApplication.setInstance(this);
 		
 		if(Constants.dbUseCloudFoundryDatabase) {
@@ -126,6 +133,14 @@ public class EnterpriseApplication extends Application implements HttpServletReq
 
 	public void setTimeZoneId(String timeZoneId) {
 		this.timeZoneId = timeZoneId;
+	}
+
+	public HttpServletRequest getHttpServletRequest() {
+		return httpServletRequest;
+	}
+
+	public HttpServletResponse getHttpServletResponse() {
+		return httpServletResponse;
 	}
 	
 }

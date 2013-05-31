@@ -2,7 +2,7 @@ package enterpriseapp.hibernate;
 
 
 import com.vaadin.Application;
-import com.vaadin.service.ApplicationContext;
+import com.vaadin.service.ApplicationContext.TransactionListener;
 
 /**
  * This class allows automatic committing and closing of the current Hibernate session. An instance of this class is
@@ -11,7 +11,7 @@ import com.vaadin.service.ApplicationContext;
  * @author Alejandro Duarte
  *
  */
-public class DefaultTransactionListener implements ApplicationContext.TransactionListener {
+public class DefaultTransactionListener implements TransactionListener {
 
 	private static final long serialVersionUID = 1L;
 

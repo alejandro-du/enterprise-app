@@ -28,6 +28,7 @@ public abstract class Constants {
 	public static final String mailSmtpPassword() { return Utils.getProperty("mail.smtp.password"); }
 	public static final String mailDeviateTo = Utils.getProperty("mail.deviateTo");
 	
+	public static final int appSessionTimeout = new Integer(Utils.getProperty("app.sessionTimeout"));
 	public static final boolean appCollectLogFiles = new Boolean(Utils.getProperty("app.collectLogFiles"));
 	public static final String appLogBasedAuditFormat = Utils.getProperty("app.logBasedAuditFormat");
 	
