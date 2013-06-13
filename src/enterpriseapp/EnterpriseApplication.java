@@ -37,9 +37,9 @@ public class EnterpriseApplication extends Application implements HttpServletReq
 	
 	protected String timeZoneId = TimeZone.getDefault().getID();
 
-	private HttpServletRequest httpServletRequest;
+	private transient HttpServletRequest httpServletRequest;
 
-	private HttpServletResponse httpServletResponse;
+	private transient HttpServletResponse httpServletResponse;
 	
 	/**
 	 * Adds a default transaction listener.
