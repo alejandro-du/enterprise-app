@@ -8,7 +8,6 @@ import com.vaadin.terminal.UserError;
 import com.vaadin.ui.Alignment;
 import com.vaadin.ui.Button;
 import com.vaadin.ui.Button.ClickEvent;
-import com.vaadin.ui.CheckBox;
 import com.vaadin.ui.FormLayout;
 import com.vaadin.ui.Label;
 import com.vaadin.ui.Panel;
@@ -17,7 +16,6 @@ import com.vaadin.ui.TextField;
 import com.vaadin.ui.VerticalLayout;
 import com.vaadin.ui.Window;
 
-import enterpriseapp.EnterpriseApplication;
 import enterpriseapp.ui.Constants;
 
 /**
@@ -33,25 +31,20 @@ public abstract class AuthWindow extends Window implements Button.ClickListener 
 	private static final long serialVersionUID = 1L;
 	
 	protected VerticalLayout layout = new VerticalLayout();
+	protected FormLayout formLayout = new FormLayout();
 	protected Panel panel = new Panel();
 	protected Label label = new Label();
 	protected TextField loginTf = new TextField();
 	protected PasswordField passwordTf = new PasswordField();
-	protected CheckBox staySignedIn = new CheckBox();
 	protected Button loginButton;
 	
 	public AuthWindow(String windowCaption, String buttonCaption, String userLoginCaption, String userPasswordCaption, String login, String password) {
-		this(windowCaption, buttonCaption, userLoginCaption, userPasswordCaption, login, password, null);
-	}
-	
-	public AuthWindow(String windowCaption, String buttonCaption, String userLoginCaption, String userPasswordCaption, String login, String password, String staySignedInCaption) {
 		setCaption(windowCaption);
 		loginTf.setCaption(userLoginCaption);
 		passwordTf.setCaption(userPasswordCaption);
 		loginButton = new Button(buttonCaption);
 		loginTf.setValue(login);
 		passwordTf.setValue(password);
-		staySignedIn.setCaption(staySignedInCaption);
 		
 		initLayout();
 	}
@@ -68,7 +61,6 @@ public abstract class AuthWindow extends Window implements Button.ClickListener 
 		
 		layout.setSizeUndefined();
 		
-		FormLayout formLayout = new FormLayout();
 		formLayout.setMargin(true);
 		
 		loginButton.addListener(this);
@@ -79,10 +71,6 @@ public abstract class AuthWindow extends Window implements Button.ClickListener 
 		formLayout.addComponent(loginTf);
 		formLayout.addComponent(passwordTf);
 		formLayout.addComponent(loginButton);
-		
-		if(staySignedIn.getCaption() != null) {
-			formLayout.addComponent(staySignedIn);
-		}
 		
 		layout.addComponent(panel);
 		layout.setComponentAlignment(panel, Alignment.MIDDLE_CENTER);
@@ -117,12 +105,6 @@ public abstract class AuthWindow extends Window implements Button.ClickListener 
 		} else {
 			try {
 				buttonClicked();
-				
-				if(staySignedIn.booleanValue()) {
-					EnterpriseApplication.getInstance().getHttpServletRequest().getSession().setMaxInactiveInterval(-1);
-				} else {
-					EnterpriseApplication.getInstance().getHttpServletRequest().getSession().setMaxInactiveInterval(Constants.appSessionTimeout);
-				}
 				
 			} catch(InvalidValueException e) {
 				label.setCaption(e.getMessage());
