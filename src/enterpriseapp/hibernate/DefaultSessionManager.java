@@ -1,5 +1,7 @@
 package enterpriseapp.hibernate;
 
+import java.io.Serializable;
+
 import org.hibernate.Session;
 
 import enterpriseapp.hibernate.CustomHbnContainer.SessionManager;
@@ -10,7 +12,9 @@ import enterpriseapp.hibernate.CustomHbnContainer.SessionManager;
  * @author Alejandro Duarte
  *
  */
-public class DefaultSessionManager implements SessionManager {
+public class DefaultSessionManager implements SessionManager, Serializable {
+
+	private static final long serialVersionUID = 1L;
 
 	@Override
 	public Session getSession() {

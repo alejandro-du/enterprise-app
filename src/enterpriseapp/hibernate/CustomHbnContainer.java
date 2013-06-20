@@ -496,7 +496,7 @@ public class CustomHbnContainer<T> implements Container.Indexed, Container.Sorta
 	/** Entity class that will be listed in container */
 	protected Class<T> type;
 	protected final SessionManager sessionManager;
-	private ClassMetadata classMetadata;
+	private transient ClassMetadata classMetadata;
 
 	/** internal flag used to temporarily invert order of listing */
 	private boolean normalOrder = true;
@@ -552,7 +552,7 @@ public class CustomHbnContainer<T> implements Container.Indexed, Container.Sorta
 	protected HashSet<ContainerFilter> filters;
 
 	/** Caches weak references to items, in order to conserve memory. */
-	private final HashMap<Object, WeakReference<EntityItem<T>>> itemCache = new HashMap<Object, WeakReference<EntityItem<T>>>();
+	private transient HashMap<Object, WeakReference<EntityItem<T>>> itemCache;
 
 	/** A map of added javabean property names to their respective types */
 	private final Map<String, Class<?>> addedProperties = new HashMap<String, Class<?>>();
@@ -562,6 +562,14 @@ public class CustomHbnContainer<T> implements Container.Indexed, Container.Sorta
 	 * weakreferences
 	 */
 	private int loadCount;
+
+	private HashMap<Object, WeakReference<EntityItem<T>>> getItemCache() {
+		if(itemCache == null) {
+			itemCache = new HashMap<Object, WeakReference<EntityItem<T>>>();
+		}
+		
+		return itemCache;
+	}
 
 	/**
 	 * Creates a new instance of HbnContainer, listing all object of given type
@@ -629,9 +637,9 @@ public class CustomHbnContainer<T> implements Container.Indexed, Container.Sorta
 		EntityItem<T> item = null;
 		Serializable itemId = (Serializable) getIdForPojo(entity);
 
-		if (itemCache != null) {
+		if (getItemCache() != null) {
 			// refresh itemCache
-			WeakReference<EntityItem<T>> weakReference = itemCache.get(itemId);
+			WeakReference<EntityItem<T>> weakReference = getItemCache().get(itemId);
 			if (weakReference != null) {
 				item = weakReference.get();
 				if (item != null) { // may be already collected, but not cleaned
@@ -751,7 +759,7 @@ public class CustomHbnContainer<T> implements Container.Indexed, Container.Sorta
 
 		EntityItem<T> item;
 		// Search the itemCache if the entityitem is already loaded
-		WeakReference<EntityItem<T>> weakReference = itemCache.get(itemId);
+		WeakReference<EntityItem<T>> weakReference = getItemCache().get(itemId);
 		if (weakReference != null) {
 			item = weakReference.get();
 			// still check if weakreference still contained the item (may be
@@ -763,7 +771,7 @@ public class CustomHbnContainer<T> implements Container.Indexed, Container.Sorta
 		}
 
 		item = new EntityItem<T>(itemId);
-		itemCache.put(itemId, new WeakReference<EntityItem<T>>(item));
+		getItemCache().put(itemId, new WeakReference<EntityItem<T>>(item));
 		return item;
 	}
 
@@ -779,7 +787,7 @@ public class CustomHbnContainer<T> implements Container.Indexed, Container.Sorta
 	 */
 	private void cleanCache() {
 		if (++loadCount % REFERENCE_CLEANUP_INTERVAL == 0) {
-			Set<Entry<Object, WeakReference<EntityItem<T>>>> entries = itemCache.entrySet();
+			Set<Entry<Object, WeakReference<EntityItem<T>>>> entries = getItemCache().entrySet();
 			for (Iterator<Entry<Object, WeakReference<EntityItem<T>>>> iterator = entries.iterator(); iterator
 					.hasNext();) {
 				Entry<Object, WeakReference<EntityItem<T>>> entry = iterator.next();

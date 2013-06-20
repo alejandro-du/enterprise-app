@@ -1,5 +1,6 @@
 package enterpriseapp.ui.crud;
 
+import java.io.Serializable;
 import java.util.Collection;
 import java.util.Date;
 
@@ -17,7 +18,9 @@ import enterpriseapp.ui.Constants;
  * @author Alejandro Duarte.
  *
  */
-public class DefaultPropertyFormatter implements PropertyFormatter {
+public class DefaultPropertyFormatter implements PropertyFormatter, Serializable {
+
+	private static final long serialVersionUID = 1L;
 
 	@Override
 	public String formatPropertyValue(Object rowId, Object colId, Property property, Object bean, Object propertyObject, Class<?> returnType, CrudField crudFieldAnnotation, CrudTable<?> crudTable) {
