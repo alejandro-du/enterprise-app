@@ -49,7 +49,7 @@ public class DefaultContextListener implements ServletContextListener {
 			LogFilesCollectorJob.scheduleLogFilesCollectorJob();
 		}
 		
-		logger.info("Context initialized");
+		logger.info("Context initialized (" + contextEvent.getServletContext().getContextPath() + ")");
     }
 
 	@Override

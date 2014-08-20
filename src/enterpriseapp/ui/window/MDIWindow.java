@@ -1,15 +1,12 @@
 package enterpriseapp.ui.window;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
-import java.util.Set;
 
 import org.vaadin.dialogs.ConfirmDialog;
 
-import com.vaadin.event.Action;
-import com.vaadin.event.Action.Handler;
-import com.vaadin.event.ShortcutAction;
-import com.vaadin.terminal.Resource;
+import com.vaadin.server.Resource;
 import com.vaadin.ui.Component;
 import com.vaadin.ui.HorizontalLayout;
 import com.vaadin.ui.MenuBar;
@@ -18,6 +15,7 @@ import com.vaadin.ui.MenuBar.MenuItem;
 import com.vaadin.ui.TabSheet;
 import com.vaadin.ui.TabSheet.CloseHandler;
 import com.vaadin.ui.TabSheet.Tab;
+import com.vaadin.ui.UI;
 import com.vaadin.ui.VerticalLayout;
 import com.vaadin.ui.Window;
 import com.vaadin.ui.themes.Reindeer;
@@ -32,13 +30,9 @@ import enterpriseapp.ui.Constants;
  * @author Alejandro Duarte
  *
  */
-public class MDIWindow extends Window implements Command, Handler, CloseHandler {
+public class MDIWindow extends VerticalLayout implements Command, CloseHandler {
 	
 	private static final long serialVersionUID = 1L;
-	
-	protected Action actionNext = new ShortcutAction("", ShortcutAction.KeyCode.SPACEBAR, new int[] {ShortcutAction.ModifierKey.CTRL});
-	protected Action actionPrevious = new ShortcutAction("", ShortcutAction.KeyCode.SPACEBAR, new int[] {ShortcutAction.ModifierKey.CTRL, ShortcutAction.ModifierKey.SHIFT});
-	protected Action[] actions = {actionNext, actionPrevious};
 	
 	protected static int xStart = 35;
 	protected static int yStart = 35;
@@ -66,8 +60,7 @@ public class MDIWindow extends Window implements Command, Handler, CloseHandler 
 	 * @param title Window title.
 	 * @param modules modules to add.
 	 */
-	public MDIWindow(String title, List<Module> modules) {
-		super(title);
+	public MDIWindow(List<Module> modules) {
 		this.modules = modules;
 	}
 	
@@ -85,8 +78,9 @@ public class MDIWindow extends Window implements Command, Handler, CloseHandler 
 		initWorkbenchArea();
 		addModules(user);
 		initWindowMenu(addMenusBefore);
-		addActionHandler(this);
-		setContent(windowLayout);
+		addComponent(windowLayout);
+		
+		setSizeFull();
 	}
 	
 	protected void addMainMenu() {
@@ -175,7 +169,7 @@ public class MDIWindow extends Window implements Command, Handler, CloseHandler 
 			window.getContent().setSizeFull();
 			placeWindow(window);
 			
-			addWindow(window);
+			UI.getCurrent().addWindow(window);
 			
 		} else {
 			Tab tab = tabsheet.addTab(component, caption, icon);
@@ -215,19 +209,18 @@ public class MDIWindow extends Window implements Command, Handler, CloseHandler 
 	
 	public void closeAllWindows(Class<?> clazz, CloseListener closeListener) {
 		if(windowsMenuItem != null && !windowsMenuItem.isVisible()) {
-			Set<Window> childWindows = getChildWindows();
+			Collection<Window> childWindows = UI.getCurrent().getWindows();
 			ArrayList<Window> windowsToRemove = new ArrayList<Window>(); 
-			
 			for(Window window : childWindows) {
-				if(window.isClosable() && closeListener.close(window.getContent().getComponentIterator().next())) {
-					if(clazz == null || clazz.isAssignableFrom(window.getContent().getComponentIterator().next().getClass())) {
+				if(window.isClosable() && closeListener.close((Component) UI.getAllChildrenIterable(window.getContent()).iterator().next())) {
+					if(clazz == null || clazz.isAssignableFrom(UI.getAllChildrenIterable(window.getContent()).iterator().next().getClass())) {
 						windowsToRemove.add(window);
 					}
 				}
 			}
 			
 			for(Window window : windowsToRemove) {
-				removeWindow(window);
+				window.close();
 			}
 			
 		} else {
@@ -320,54 +313,17 @@ public class MDIWindow extends Window implements Command, Handler, CloseHandler 
 		tabsMenuItem.setVisible(false);
 		windowsMenuItem.setVisible(true);
 		
-		for(Window window : getChildWindows()) {
-			Component component = window.getComponentIterator().next();
+		for(Window window : UI.getCurrent().getWindows()) {
+			Component component = (Component) UI.getAllChildrenIterable(window).iterator().next();
 			addWorkbenchContent(component, window.getCaption(), window.getIcon(), window.isClosable(), confirmClosingComponents.contains(component));
 		}
 		
-		while(getChildWindows().size() > 0) {
-			removeWindow((Window) getChildWindows().toArray()[0]);
+		while(UI.getCurrent().getWindows().size() > 0) {
+			Window window = (Window) UI.getCurrent().getWindows().toArray()[0];
+			window.close();
 		}
 		
 		tabsheet.setVisible(true);
-	}
-
-	@Override
-	public Action[] getActions(Object target, Object sender) {
-		return actions;
-	}
-
-	@Override
-	public void handleAction(Action action, Object sender, Object target) {
-		if(action.equals(actionNext)) {
-			if(!tabsMenuItem.isVisible()) {
-				Tab selectedTab = tabsheet.getTab(tabsheet.getSelectedTab());
-				int selectedTabPosition = tabsheet.getTabPosition(selectedTab);
-				int newTabPosition = 0;
-				
-				if(selectedTabPosition == tabsheet.getComponentCount() - 1) {
-					newTabPosition = 0;
-				} else {
-					newTabPosition = selectedTabPosition + 1;
-				}
-				
-				tabsheet.setSelectedTab(tabsheet.getTab(newTabPosition).getComponent());
-			}
-		} else if(action.equals(actionPrevious)) {
-			if(!tabsMenuItem.isVisible()) {
-				Tab selectedTab = tabsheet.getTab(tabsheet.getSelectedTab());
-				int selectedTabPosition = tabsheet.getTabPosition(selectedTab);
-				int newTabPosition = 0;
-				
-				if(selectedTabPosition == 0) {
-					newTabPosition = tabsheet.getComponentCount() - 1;
-				} else {
-					newTabPosition = selectedTabPosition - 1;
-				}
-				
-				tabsheet.setSelectedTab(tabsheet.getTab(newTabPosition).getComponent());
-			}
-		}
 	}
 
 	@Override

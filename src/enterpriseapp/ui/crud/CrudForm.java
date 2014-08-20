@@ -3,7 +3,6 @@ package enterpriseapp.ui.crud;
 import javax.persistence.GeneratedValue;
 import javax.persistence.OneToMany;
 
-
 import com.vaadin.data.Item;
 import com.vaadin.data.util.BeanItem;
 import com.vaadin.ui.Alignment;
@@ -65,7 +64,7 @@ public class CrudForm<T> extends Form implements FieldContainer {
 		}
 		
 		setFormFieldFactory(formFieldFactory);
-		setWriteThrough(false);
+		setBuffered(false);
 		setImmediate(true);
 		
 		initLayout();

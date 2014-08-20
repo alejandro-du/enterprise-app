@@ -4,7 +4,7 @@ import com.vaadin.data.Validator.InvalidValueException;
 import com.vaadin.event.FieldEvents;
 import com.vaadin.event.FieldEvents.FocusEvent;
 import com.vaadin.event.ShortcutAction.KeyCode;
-import com.vaadin.terminal.UserError;
+import com.vaadin.server.UserError;
 import com.vaadin.ui.Alignment;
 import com.vaadin.ui.Button;
 import com.vaadin.ui.Button.ClickEvent;
@@ -66,7 +66,7 @@ public abstract class AuthWindow extends Window implements Button.ClickListener 
 		loginButton.addListener(this);
 		
 		panel.setVisible(false);
-		panel.addComponent(label);
+		panel.setContent(label);
 		
 		formLayout.addComponent(loginTf);
 		formLayout.addComponent(passwordTf);

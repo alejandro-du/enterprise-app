@@ -10,12 +10,11 @@ import java.io.InputStreamReader;
 
 import org.vaadin.dialogs.ConfirmDialog;
 
-
 import com.vaadin.data.Property;
 import com.vaadin.data.Property.ValueChangeListener;
 import com.vaadin.data.util.FilesystemContainer;
 import com.vaadin.data.util.IndexedContainer;
-import com.vaadin.terminal.FileResource;
+import com.vaadin.server.FileResource;
 import com.vaadin.ui.Button;
 import com.vaadin.ui.Button.ClickEvent;
 import com.vaadin.ui.Button.ClickListener;
@@ -25,8 +24,8 @@ import com.vaadin.ui.HorizontalSplitPanel;
 import com.vaadin.ui.Table;
 import com.vaadin.ui.VerticalLayout;
 
+import enterpriseapp.EnterpriseApplication;
 import enterpriseapp.Utils;
-import enterpriseapp.ui.Constants;
 
 public class FilesViewerComponent extends CustomComponent implements ClickListener, ValueChangeListener {
 
@@ -125,8 +124,8 @@ public class FilesViewerComponent extends CustomComponent implements ClickListen
 	public void buttonClick(ClickEvent event) {
 		
 		if(event.getButton().equals(downloadButton)) {
-			FileResource resource = new FileResource((File) filesTable.getValue(), getApplication());
-			getApplication().getMainWindow().open(resource, "_blank", 700, 350, 0);
+			FileResource resource = new FileResource((File) filesTable.getValue());
+			EnterpriseApplication.getInstance().getMainWindow().open(resource, "", true);
 			updateTable();
 			
 		} else if(event.getButton().equals(deleteButton)) {

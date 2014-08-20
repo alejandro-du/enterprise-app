@@ -69,6 +69,7 @@ public class CrudTable<T extends Dto> extends Table implements FieldContainer {
 			}
 		});
 		
+		setBuffered(false);
 		setMultiSelect(true);
 		setContainerDataSource(container);
 		configureColumns();
@@ -111,7 +112,7 @@ public class CrudTable<T extends Dto> extends Table implements FieldContainer {
 	}
 	
 	/**
-	 * Uptades table content.
+	 * Updates table's content.
 	 */
 	@SuppressWarnings("unchecked")
 	public void updateTable() {
@@ -172,7 +173,7 @@ public class CrudTable<T extends Dto> extends Table implements FieldContainer {
 				if(container instanceof BeanContainer) {
 					bean = ((BeanContainer) container).getItem(rowId).getBean();
 				} else {
-					bean = ((EntityItem.EntityItemProperty) property).getPojo();
+					bean = ((EntityItem.EntityProperty) property).getPojo();
 				}
 				
 				String propertyName = colId.toString();

@@ -20,10 +20,12 @@ import org.hibernate.Query;
 import org.hibernate.criterion.Criterion;
 import org.hibernate.criterion.MatchMode;
 import org.hibernate.criterion.Restrictions;
-import org.hibernate.impl.CriteriaImpl.Subcriteria;
+import org.hibernate.internal.CriteriaImpl.Subcriteria;
+import org.hibernate.metadata.ClassMetadata;
 import org.hibernate.type.Type;
 
 import com.vaadin.data.Item;
+import com.vaadin.data.hbnutil.ContainerFilter;
 
 import enterpriseapp.Utils;
 import enterpriseapp.hibernate.annotation.CrudTable;
@@ -46,7 +48,7 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 	 * @param clazz Entity class.
 	 */
 	public DefaultHbnContainer(Class<T> clazz) {
-		super(clazz, new DefaultSessionManager());
+		super(clazz, Db.getCurrentSession().getSessionFactory());
 	}
 	
 	/**
@@ -56,7 +58,7 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 		T newInstance = null;
 		
 		try {
-			newInstance = type.newInstance();
+			newInstance = entityType.newInstance();
 		} catch (InstantiationException e) {
 			throw new RuntimeException(e);
 		} catch (IllegalAccessException e) {
@@ -72,21 +74,21 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 	 * @return the Entity with the given id or null if not found.
 	 */
 	public T getEntity(Serializable id) {
-		return (T) sessionManager.getSession().get(type, id);
+		return (T) sessionFactory.getCurrentSession().get(entityType, id);
 	}
 	
 	/**
 	 * @return the number of Entities in this container.
 	 */
 	public long count() {
-		return (Long) singleSpecialQuery("select count(id) from " + type.getSimpleName());
+		return (Long) singleSpecialQuery("select count(id) from " + entityType.getSimpleName());
 	}
 	
 	@Override
 	public boolean removeItem(Object itemId) throws UnsupportedOperationException {
 		boolean result = super.removeItem(itemId);
-		sessionManager.getSession().getTransaction().commit();
-		sessionManager.getSession().beginTransaction();
+		sessionFactory.getCurrentSession().getTransaction().commit();
+		sessionFactory.getCurrentSession().beginTransaction();
 		return result;
 	}
 	
@@ -94,7 +96,7 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 	 * Removes all items in the container.
 	 */
 	public boolean removeAllItems() throws UnsupportedOperationException {
-		update("delete from " + type.getSimpleName());
+		update("delete from " + entityType.getSimpleName());
 		return true;
 	}
 	
@@ -132,8 +134,8 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 	public Serializable saveOrUpdateEntity(T entity) {
 		beforeSaveOrUpdate(entity);
 		
-		entity = (T) sessionManager.getSession().merge(entity);
-		sessionManager.getSession().saveOrUpdate(entity);
+		entity = (T) sessionFactory.getCurrentSession().merge(entity);
+		sessionFactory.getCurrentSession().saveOrUpdate(entity);
 		
 		clearInternalCache();
 		fireItemSetChange();
@@ -149,7 +151,7 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 	 */
 	@Override
 	public Serializable saveEntity(T entity) {
-		sessionManager.getSession().save(entity);
+		sessionFactory.getCurrentSession().save(entity);
 		
 		clearInternalCache();
 		fireItemSetChange();
@@ -217,7 +219,7 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 	 */
 	protected List<T> query(final String query, final Object[] params) {
 		
-		Query q = sessionManager.getSession().createQuery(query);
+		Query q = sessionFactory.getCurrentSession().createQuery(query);
 		
 		if(params != null) {
 			for(int i = 0; i < params.length; i++) {
@@ -311,7 +313,7 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 	 */
 	@SuppressWarnings("rawtypes")
 	protected List specialQuery(final String query, final Object[] params) {
-		Query q = sessionManager.getSession().createQuery(query);
+		Query q = sessionFactory.getCurrentSession().createQuery(query);
 		
 		if(params != null) {
 			for(int i = 0; i < params.length; i++) {
@@ -333,7 +335,7 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 	 */
 	@SuppressWarnings("rawtypes")
 	protected List specialQuery(final String query, final String[] paramNames, final Object[] params) {
-		Query q = sessionManager.getSession().createQuery(query);
+		Query q = sessionFactory.getCurrentSession().createQuery(query);
 		
 		if(params != null) {
 			for(int i = 0; i < params.length; i++) {
@@ -432,7 +434,7 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 	 * @return Query object.
 	 */
 	public Query getQuery(final String query, final String[] paramNames, final Object[] params, final String[] collectionParamNames, Collection<?>[] collectionParams, Integer maxResults, Integer firstResult) {
-		Query q = sessionManager.getSession().createQuery(query);
+		Query q = sessionFactory.getCurrentSession().createQuery(query);
 		
 		if(maxResults != null) {
 			q.setMaxResults(maxResults);
@@ -523,18 +525,26 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 		return dynaProperties;
 	}
 
+	protected ClassMetadata getClassMetadata() {
+		if (classMetadata == null) {
+			classMetadata = sessionFactory.getClassMetadata(entityType);
+		}
+		return classMetadata;
+	}
+	
 	/**
 	 * @return a Criteria object with restrictions accordingly to current filters.
 	 */
 	@Override
 	public Criteria getBaseCriteria() {
-		Criteria criteria = sessionManager.getSession().createCriteria(type);
+		Criteria criteria = sessionFactory.getCurrentSession().createCriteria(entityType);
 		ArrayList<Subcriteria> subcriterias = new ArrayList<Subcriteria>();
 		
 		if (filters != null) {
-			for (ContainerFilter filter : filters) {
+			for (ContainerFilter f : filters) {
+				StringContainerFilter filter = (StringContainerFilter) f;
 				
-				String propertyString = filter.propertyId.toString();
+				String propertyString = filter.getPropertyId().toString();
 				String[] properties = propertyString.split("\\.");
 				String property = properties[properties.length - 1];
 				Type propertyType = getClassMetadata().getPropertyType(properties[0]);
@@ -557,7 +567,7 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 							subcriterias.add((Subcriteria) criteria);
 						}
 						
-						propertyType = sessionManager.getSession().getSessionFactory().getClassMetadata(propertyType.getReturnedClass()).getPropertyType(properties[i + 1]);
+						propertyType = sessionFactory.getCurrentSession().getSessionFactory().getClassMetadata(propertyType.getReturnedClass()).getPropertyType(properties[i + 1]);
 					}
 				}
 				
@@ -565,7 +575,7 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 				
 				if(propertyType.isCollectionType()) {
 					try {
-						Field field = type.getDeclaredField(property);
+						Field field = entityType.getDeclaredField(property);
 						ParameterizedType parameterizedType = (ParameterizedType) field.getGenericType();
 						returnedClass = (Class<?>) parameterizedType.getActualTypeArguments()[0];
 						
@@ -596,15 +606,15 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 						}
 						
 						property = crudTableAnnotation.filteringPropertyName();
-						propertyType = sessionManager.getSession().getSessionFactory().getClassMetadata(returnedClass).getPropertyType(property);
+						propertyType = sessionFactory.getCurrentSession().getSessionFactory().getClassMetadata(returnedClass).getPropertyType(property);
 						
 					} else {
 						throw new RuntimeException("Entity class " + getClassMetadata().getEntityName() + " doesn't declare a filtering property name (no CrudTable annotation present).");
 					}
 				}
 				
-				ContainerFilter f = new ContainerFilter(property, filter.filterString, filter.filterString2, filter.ignoreCase, filter.onlyMatchPrefix);
-				Criterion criterion = getCustomRestriction(f, propertyType.getReturnedClass());
+				StringContainerFilter sf = new StringContainerFilter(property, filter.filterString, filter.filterString2, filter.ignoreCase, filter.onlyMatchPrefix);
+				Criterion criterion = getCustomRestriction(sf, propertyType.getReturnedClass());
 				
 				if(criterion != null) {
 					criteria.add(criterion);
@@ -626,42 +636,42 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 	 * @param clazz property class.
 	 * @return a Restriction object for the given Filter.
 	 */
-	public Criterion getCustomRestriction(ContainerFilter filter, Class<?> clazz) {
+	public Criterion getCustomRestriction(StringContainerFilter filter, Class<?> clazz) {
 		
 		Criterion criterion = null;
 		
 		if(clazz.equals(String.class)) {
 			if (filter.ignoreCase) {
-				criterion = Restrictions.ilike(filter.propertyId.toString(), filter.filterString, filter.onlyMatchPrefix ? MatchMode.START : MatchMode.ANYWHERE);
+				criterion = Restrictions.ilike(filter.getPropertyId().toString(), filter.filterString, filter.onlyMatchPrefix ? MatchMode.START : MatchMode.ANYWHERE);
 			} else {
-				criterion = Restrictions.like(filter.propertyId.toString(), filter.filterString, filter.onlyMatchPrefix ? MatchMode.START : MatchMode.ANYWHERE);
+				criterion = Restrictions.like(filter.getPropertyId().toString(), filter.filterString, filter.onlyMatchPrefix ? MatchMode.START : MatchMode.ANYWHERE);
 			}
 		} else if(clazz.equals(Integer.class)) {
 			try {
-				criterion = Restrictions.eq(filter.propertyId.toString(), new Integer(filter.filterString));
+				criterion = Restrictions.eq(filter.getPropertyId().toString(), new Integer(filter.filterString));
 			} catch (NumberFormatException e) {
 			}
 		} else if(clazz.equals(Long.class)) {
 			try {
-				criterion = Restrictions.eq(filter.propertyId.toString(), new Long(filter.filterString));
+				criterion = Restrictions.eq(filter.getPropertyId().toString(), new Long(filter.filterString));
 			} catch (NumberFormatException e) {
 			}
 			
 		} else if(clazz.equals(Double.class)) {
 			try {
-				criterion = Restrictions.eq(filter.propertyId.toString(), new Double(filter.filterString));
+				criterion = Restrictions.eq(filter.getPropertyId().toString(), new Double(filter.filterString));
 			} catch (NumberFormatException e) {
 			}
 			
 		} else if(clazz.equals(Float.class)) {
 			try {
-				criterion = Restrictions.eq(filter.propertyId.toString(), new Double(filter.filterString));
+				criterion = Restrictions.eq(filter.getPropertyId().toString(), new Double(filter.filterString));
 			} catch (NumberFormatException e) {
 			}
 			
 		} else if(clazz.equals(BigDecimal.class)) {
 			try {
-				criterion = Restrictions.eq(filter.propertyId.toString(), new BigDecimal(filter.filterString));
+				criterion = Restrictions.eq(filter.getPropertyId().toString(), new BigDecimal(filter.filterString));
 			} catch (NumberFormatException e) {
 			}
 			
@@ -682,23 +692,23 @@ public class DefaultHbnContainer<T> extends CustomHbnContainer<T> {
 					int length = filter.filterString2.length() < Utils.getDateTimeFormatPattern().length() ? filter.filterString2.length() : Utils.getDateTimeFormatPattern().length();
 					date2 = new SimpleDateFormat(Utils.getDateTimeFormatPattern().substring(0, length)).parse(filter.filterString2);
 				}
-				criterion = Restrictions.between(filter.propertyId.toString(), date1, date2);
+				criterion = Restrictions.between(filter.getPropertyId().toString(), date1, date2);
 			} catch (ParseException e) {
 				Date date1 = new Date(1);
 				Date date2 = new Date(2);
 				// this should reject all results
-				criterion = Restrictions.between(filter.propertyId.toString(), date2 , date1); 
+				criterion = Restrictions.between(filter.getPropertyId().toString(), date2 , date1); 
 			}
 		} else if(clazz.equals(Boolean.class)) {
 			if(filter.filterString.equalsIgnoreCase(Constants.uiYes) || filter.filterString.equalsIgnoreCase(Constants.uiYes.substring(0, 1)) || filter.filterString.equals("1")) {
-				criterion = Restrictions.eq(filter.propertyId.toString(), true);
+				criterion = Restrictions.eq(filter.getPropertyId().toString(), true);
 				
 			} else if (filter.filterString.equalsIgnoreCase(Constants.uiNo) || filter.filterString.equalsIgnoreCase(Constants.uiNo.substring(0, 1)) || filter.filterString.equals("0")) {
-				criterion = Restrictions.eq(filter.propertyId.toString(), false);
+				criterion = Restrictions.eq(filter.getPropertyId().toString(), false);
 				
 			} else {
 				// this should reject all results
-				criterion = Restrictions.and(Restrictions.eq(filter.propertyId.toString(), true), Restrictions.eq(filter.propertyId.toString(), false));
+				criterion = Restrictions.and(Restrictions.eq(filter.getPropertyId().toString(), true), Restrictions.eq(filter.getPropertyId().toString(), false));
 			}
 			
 		}

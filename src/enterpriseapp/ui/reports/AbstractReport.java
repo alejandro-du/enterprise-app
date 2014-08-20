@@ -27,9 +27,6 @@ import net.sf.jasperreports.engine.export.ooxml.JRXlsxExporter;
 import net.sf.jasperreports.j2ee.servlets.ImageServlet;
 
 import org.vaadin.hene.popupbutton.PopupButton;
-import org.vaadin.hene.splitbutton.SplitButton;
-import org.vaadin.hene.splitbutton.SplitButton.SplitButtonClickEvent;
-import org.vaadin.hene.splitbutton.SplitButton.SplitButtonClickListener;
 
 import ar.com.fdvs.dj.core.DynamicJasperHelper;
 import ar.com.fdvs.dj.core.layout.ClassicLayoutManager;
@@ -48,9 +45,9 @@ import ar.com.fdvs.dj.domain.entities.columns.AbstractColumn;
 import ar.com.fdvs.dj.domain.entities.columns.PropertyColumn;
 import ar.com.fdvs.dj.domain.entities.conditionalStyle.ConditionalStyle;
 
-import com.vaadin.terminal.StreamResource;
-import com.vaadin.terminal.UserError;
-import com.vaadin.terminal.gwt.server.WebApplicationContext;
+import com.vaadin.server.StreamResource;
+import com.vaadin.server.UserError;
+import com.vaadin.server.VaadinSession;
 import com.vaadin.ui.Accordion;
 import com.vaadin.ui.Alignment;
 import com.vaadin.ui.Button;
@@ -68,6 +65,7 @@ import com.vaadin.ui.TextField;
 import com.vaadin.ui.VerticalLayout;
 import com.vaadin.ui.themes.BaseTheme;
 
+import enterpriseapp.EnterpriseApplication;
 import enterpriseapp.Utils;
 import enterpriseapp.ui.Constants;
 
@@ -75,7 +73,7 @@ import enterpriseapp.ui.Constants;
  * @author Alejandro Duarte
  *
  */
-public abstract class AbstractReport extends CustomComponent implements ClickListener, SplitButtonClickListener {
+public abstract class AbstractReport extends CustomComponent implements ClickListener {
 
 	private static final long serialVersionUID = 1L;
 	
@@ -85,7 +83,7 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 	protected Button refreshButton;
 	protected PopupButton columnsButton;
 	protected PopupButton groupingButton;
-	protected SplitButton exportButton;
+	protected PopupButton exportButton;
 	protected Button pdfButton;
 	protected Button excelButton;
 	protected Button wordButton;
@@ -288,7 +286,7 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 		String random = "" + Math.random() * 1000.0;
 		random = random.replace('.', '0').replace(',', '0');
 		
-		exporter.setParameter(JRHtmlExporterParameter.IMAGES_URI, Utils.getWebContextPath(getApplication()) + "/image?r=" + random + "&image=");
+		exporter.setParameter(JRHtmlExporterParameter.IMAGES_URI, Utils.getWebContextPath(EnterpriseApplication.getInstance()) + "/image?r=" + random + "&image=");
 		return exporter;
 	}
 	
@@ -321,8 +319,7 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 			
 			outputStream = new ByteArrayOutputStream();
 			
-			WebApplicationContext context = (WebApplicationContext) getApplication().getContext();
-			context.getHttpSession().setAttribute(ImageServlet.DEFAULT_JASPER_PRINT_SESSION_ATTRIBUTE, jasperPrint);
+			VaadinSession.getCurrent().setAttribute(ImageServlet.DEFAULT_JASPER_PRINT_SESSION_ATTRIBUTE, jasperPrint);
 			
 			exporter.setParameter(JRExporterParameter.JASPER_PRINT, jasperPrint);
 			exporter.setParameter(JRExporterParameter.OUTPUT_STREAM, outputStream);
@@ -392,7 +389,7 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 		exportOptionsLayout.addComponent(csvButton);
 		exportOptionsLayout.addComponent(xmlButton);
 		
-		exportButton = new SplitButton(Constants.uiPdf);
+		exportButton = new PopupButton(Constants.uiPdf);
 		exportButton.setComponent(exportOptionsLayout);
 		exportButton.addClickListener(this);
 		
@@ -433,7 +430,7 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 		displayLayout.addComponent(exportButton);
 		
 		Panel exportPanel = new Panel();
-		exportPanel.addComponent(displayLayout);
+		exportPanel.setContent(displayLayout);
 		
 		printBackgroundOnOddRowsCheckBox = new CheckBox(Constants.uiPrintBackgroundOnOddRows, true);
 		printColumnNamesCheckBox = new CheckBox(Constants.uiPrintColumnNames);
@@ -466,7 +463,7 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 			public void buttonClick(ClickEvent event) {
 				Object height = pageHeightTextField.getValue();
 				pageHeightTextField.setValue(pageWidthTextField.getValue());
-				pageWidthTextField.setValue(height);
+				pageWidthTextField.setValue("" + height);
 			}
 		});
 		
@@ -485,7 +482,7 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 		
 		Panel marginPanel = new Panel();
 		marginPanel.setSizeUndefined();
-		marginPanel.addComponent(marginLayout);
+		marginPanel.setContent(marginLayout);
 		
 		VerticalLayout reportConfigurationLayout = new VerticalLayout();
 		reportConfigurationLayout.setWidth("100%");
@@ -555,11 +552,6 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 	
 	public String getObservations() {
 		return (String) observationsLabel.getValue();
-	}
-	
-	@Override
-	public void splitButtonClick(SplitButtonClickEvent event) {
-		exportToPdf();
 	}
 	
 	@Override
@@ -638,9 +630,9 @@ public abstract class AbstractReport extends CustomComponent implements ClickLis
 				return new ByteArrayInputStream(getOutputStream(exporter).toByteArray());
 			}
 			
-		}, filename, getApplication());
+		}, filename);
 		
-		getApplication().getMainWindow().open(resource, "_blank", 700, 350, 0);
+		EnterpriseApplication.getInstance().getMainWindow().open(resource, "", true);
 	}
 	
 }

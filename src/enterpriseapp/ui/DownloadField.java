@@ -3,11 +3,12 @@ package enterpriseapp.ui;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 
-import org.vaadin.addon.customfield.CustomField;
 import org.vaadin.easyuploads.UploadField;
 
-import com.vaadin.Application;
-import com.vaadin.terminal.StreamResource;
+import com.vaadin.server.LegacyApplication;
+import com.vaadin.server.StreamResource;
+import com.vaadin.ui.Component;
+import com.vaadin.ui.CustomField;
 import com.vaadin.ui.Link;
 import com.vaadin.ui.Upload.FinishedEvent;
 
@@ -19,11 +20,11 @@ public class DownloadField extends CustomField {
 	protected UploadField uploadField;
 	protected String fileName;
 	
-	public DownloadField(Application application) {
+	public DownloadField(LegacyApplication application) {
 		this(application, Constants.uiDownloadFile);
 	}
 	
-	public DownloadField(Application application, String linkCaption) {
+	public DownloadField(LegacyApplication application, String linkCaption) {
 		uploadField = new UploadField() {
 			private static final long serialVersionUID = 1L;
 			@Override
@@ -55,12 +56,20 @@ public class DownloadField extends CustomField {
 						throw new RuntimeException(e);
 					}
 				}
-			}, getFileName(), application));
+			}, getFileName()));
 		} catch (Exception e) {
 			throw new RuntimeException(e);
 		}
-		
-		setCompositionRoot(link);
+	}
+	
+	@Override
+	protected Component initContent() {
+		if(isReadOnly()) {
+			link.setEnabled(getValue() != null);
+			return link;
+		} else {
+			return uploadField;
+		}
 	}
 	
 	public void uploadFinishedEvent(FinishedEvent event) {
@@ -77,20 +86,8 @@ public class DownloadField extends CustomField {
 		return byte[].class;
 	}
 	
-	@Override
-	public void setReadOnly(boolean readOnly) {
-		super.setReadOnly(false);
-		
-		if(readOnly) {
-			setCompositionRoot(link);
-			link.setEnabled(getValue() != null);
-		} else {
-			setCompositionRoot(uploadField);
-		}
-	}
-	
 	public String getFileName() {
 		return fileName;
 	}
-	
+
 }

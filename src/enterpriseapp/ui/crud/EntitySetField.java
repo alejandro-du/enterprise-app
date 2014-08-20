@@ -2,14 +2,13 @@ package enterpriseapp.ui.crud;
 
 import java.util.List;
 
-import org.vaadin.addon.customfield.CustomField;
-
-
 import com.vaadin.data.Property;
 import com.vaadin.data.Validator;
 import com.vaadin.ui.AbstractSelect;
 import com.vaadin.ui.Button;
 import com.vaadin.ui.Button.ClickEvent;
+import com.vaadin.ui.Component;
+import com.vaadin.ui.CustomField;
 import com.vaadin.ui.HorizontalLayout;
 import com.vaadin.ui.ListSelect;
 import com.vaadin.ui.themes.Reindeer;
@@ -64,9 +63,13 @@ public class EntitySetField extends CustomField implements Button.ClickListener 
 		layout.addComponent(refreshButton);
 		
 		update();
-		setCompositionRoot(layout);
 	}
 
+	@Override
+	protected Component initContent() {
+		return layout;
+	}
+	
 	protected void initSelectComponent() {
 		select = new ListSelect();
 		select.setMultiSelect(true);
@@ -185,5 +188,5 @@ public class EntitySetField extends CustomField implements Button.ClickListener 
 	public AbstractSelect getSelect() {
 		return select;
 	}
-	
+
 }

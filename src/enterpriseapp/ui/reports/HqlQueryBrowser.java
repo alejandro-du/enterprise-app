@@ -19,7 +19,7 @@ import com.vaadin.event.ItemClickEvent;
 import com.vaadin.event.ItemClickEvent.ItemClickListener;
 import com.vaadin.event.ShortcutAction.KeyCode;
 import com.vaadin.event.ShortcutAction.ModifierKey;
-import com.vaadin.terminal.Resource;
+import com.vaadin.server.Resource;
 import com.vaadin.ui.Alignment;
 import com.vaadin.ui.Button;
 import com.vaadin.ui.Button.ClickEvent;
@@ -29,6 +29,7 @@ import com.vaadin.ui.Field;
 import com.vaadin.ui.HorizontalLayout;
 import com.vaadin.ui.HorizontalSplitPanel;
 import com.vaadin.ui.Label;
+import com.vaadin.ui.Notification;
 import com.vaadin.ui.Select;
 import com.vaadin.ui.Table;
 import com.vaadin.ui.TextArea;
@@ -36,7 +37,6 @@ import com.vaadin.ui.TextField;
 import com.vaadin.ui.Tree;
 import com.vaadin.ui.VerticalLayout;
 import com.vaadin.ui.VerticalSplitPanel;
-import com.vaadin.ui.Window.Notification;
 
 import enterpriseapp.Utils;
 import enterpriseapp.hibernate.Db;
@@ -224,8 +224,6 @@ public class HqlQueryBrowser extends CustomComponent implements ClickListener, I
 	protected void executeQuery() {
 		try {
 			if(queryTextArea.getValue() != null && !queryTextArea.getValue().toString().trim().isEmpty()) {
-				Db.beginTransaction();
-				
 				Query query = Db.getCurrentSession().createQuery(queryTextArea.getValue().toString());
 				query.setResultTransformer(AliasToEntityMapResultTransformer.INSTANCE);
 				setQueryParams(query);
@@ -235,13 +233,11 @@ public class HqlQueryBrowser extends CustomComponent implements ClickListener, I
 				}
 				
 				showResult(query.list());
-				
-				Db.commitTransaction();
 			}
 			
 		} catch(Exception e) {
 			logger.debug("Error executing query", e);
-			getApplication().getMainWindow().showNotification(Constants.uiError, e.getMessage(), Notification.TYPE_ERROR_MESSAGE);
+			Notification.show(Constants.uiError, e.getMessage(), Notification.TYPE_ERROR_MESSAGE);
 		}
 	}
 	

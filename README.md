@@ -1,7 +1,12 @@
 Enterprise App
 ==============
 
-A powerful Vaadin add-on to create web applications that integrate Vaadin, Hibernate, JasperReports and Quartz technologies.
+A Vaadin add-on to create web applications that integrate Vaadin, Hibernate, JasperReports and Quartz technologies.
+
+Vaadin 7
+========
+
+Please note that Vaadin 7 support is based on deprecated "migration helper classes" such as LegacyApplication and LegacyVaadinServlet.
 
 License
 =======

@@ -4,6 +4,7 @@ import com.vaadin.event.FieldEvents.TextChangeEvent;
 import com.vaadin.event.FieldEvents.TextChangeListener;
 import com.vaadin.ui.Label;
 import com.vaadin.ui.TextArea;
+import com.vaadin.ui.VerticalLayout;
 import com.vaadin.ui.Window;
 
 import enterpriseapp.ui.Constants;
@@ -23,11 +24,16 @@ public class ImportFromClipboardWindow extends Window implements TextChangeListe
 		TextArea textArea = new TextArea();
 		textArea.addListener(this);
 		textArea.setImmediate(true);
-		textArea.setWriteThrough(true);
+		textArea.setBuffered(true);
 		textArea.setWidth("100%");
 		
-		addComponent(new Label(Constants.uiImportFromClipboardInstructions(columnsStringLabel), Label.CONTENT_XHTML));
-		addComponent(textArea);
+		VerticalLayout layout = new VerticalLayout();
+		layout.setMargin(true);
+		
+		layout.addComponent(new Label(Constants.uiImportFromClipboardInstructions(columnsStringLabel), Label.CONTENT_XHTML));
+		layout.addComponent(textArea);
+		
+		setContent(layout);
 		
 		textArea.focus();
 	}

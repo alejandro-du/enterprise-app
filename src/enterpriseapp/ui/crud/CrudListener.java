@@ -16,9 +16,10 @@ import com.vaadin.event.Action.Handler;
 import com.vaadin.event.ItemClickEvent;
 import com.vaadin.event.ItemClickEvent.ItemClickListener;
 import com.vaadin.event.ShortcutAction;
-import com.vaadin.terminal.UserError;
+import com.vaadin.server.UserError;
 import com.vaadin.ui.Button.ClickEvent;
 import com.vaadin.ui.Button.ClickListener;
+import com.vaadin.ui.Notification;
 
 import enterpriseapp.Utils;
 import enterpriseapp.hibernate.CustomHbnContainer.EntityItem;
@@ -196,7 +197,7 @@ public class CrudListener<T extends Dto> implements ValueChangeListener, ItemCli
 				try {
 					if(dialog.isConfirmed()) {
 						crudComponent.remove(crudComponent.form.getItemDataSource());
-						crudComponent.getApplication().getMainWindow().showNotification(Constants.uiDeleted);
+						Notification.show(Constants.uiDeleted);
 						cancelButtonClicked();
 					}
 				} catch(ConstraintViolationException e) {
@@ -229,7 +230,7 @@ public class CrudListener<T extends Dto> implements ValueChangeListener, ItemCli
 			crudComponent.form.setReadOnly(true);
 			
 			if(showNotification) {
-				crudComponent.getApplication().getMainWindow().showNotification(Constants.uiSaved);
+				Notification.show(Constants.uiSaved);
 			}
 		} catch(InvalidValueException e) {
 			return false;

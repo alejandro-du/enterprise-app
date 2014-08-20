@@ -32,6 +32,7 @@ import com.vaadin.ui.InlineDateField;
 import com.vaadin.ui.PasswordField;
 import com.vaadin.ui.Upload.FinishedEvent;
 
+import enterpriseapp.EnterpriseApplication;
 import enterpriseapp.Utils;
 import enterpriseapp.hibernate.ContainerFactory;
 import enterpriseapp.hibernate.CustomHbnContainer.EntityItem;
@@ -199,7 +200,7 @@ public class DefaultCrudFieldFactory extends DefaultFieldFactory {
 		}
 		
 		Field field = createField(item, propertyId, uiContext);
-		field.setWriteThrough(true);
+		field.setBuffered(true);
 		
 		FieldContainer fieldContainer = (FieldContainer) uiContext;
 		fieldContainer.addField(field, propertyId, item);
@@ -362,7 +363,7 @@ public class DefaultCrudFieldFactory extends DefaultFieldFactory {
 			final Method setFileNameMethod = bean.getClass().getMethod("set" + capitalizedFileNameField, String.class);
 			final Method getFileNameMethod = bean.getClass().getMethod("get" + capitalizedFileNameField, (Class<?>[]) null);
 			
-			field = new DownloadField(uiContext.getApplication()) {
+			field = new DownloadField(EnterpriseApplication.getInstance()) {
 				private static final long serialVersionUID = 1L;
 				
 				@Override

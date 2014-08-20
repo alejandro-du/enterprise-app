@@ -1,7 +1,6 @@
 package enterpriseapp.hibernate;
 
 import java.io.Serializable;
-import java.lang.ref.WeakReference;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.ParameterizedType;
@@ -16,91 +15,102 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.Map.Entry;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import org.hibernate.Criteria;
 import org.hibernate.EntityMode;
 import org.hibernate.HibernateException;
+import org.hibernate.Query;
 import org.hibernate.Session;
+import org.hibernate.SessionFactory;
+import org.hibernate.criterion.Criterion;
 import org.hibernate.criterion.MatchMode;
 import org.hibernate.criterion.Order;
 import org.hibernate.criterion.Projections;
 import org.hibernate.criterion.Restrictions;
-import org.hibernate.impl.CriteriaImpl.Subcriteria;
+import org.hibernate.engine.spi.SessionImplementor;
 import org.hibernate.metadata.ClassMetadata;
 import org.hibernate.type.ComponentType;
 import org.hibernate.type.Type;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
+import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.CacheLoader;
+import com.google.common.cache.LoadingCache;
 import com.vaadin.data.Container;
 import com.vaadin.data.Item;
 import com.vaadin.data.Property;
+import com.vaadin.data.hbnutil.ApplicationLogger;
+import com.vaadin.data.hbnutil.ContainerFilter;
 import com.vaadin.data.util.MethodProperty;
+import com.vaadin.data.util.converter.Converter.ConversionException;
+import com.vaadin.data.util.filter.SimpleStringFilter;
 import com.vaadin.data.util.filter.UnsupportedFilterException;
 
-/**
- * Lazy, almost full-featured, general purpose Hibernate entity container. Makes
- * lots of queries, but shouldn't consume too much memory.
- * <p>
- * HbnContainer is developed and tested with session-per-request pattern, but
- * should work with other session handling mechanisms too. To abstract away
- * session handling, user must provide an implementation of SessionManager
- * interface, via HbnContainer fetches reference to Session instance whenever it
- * needs it. Session returned by HbnContainer is expected to be open.
- * 
- * <p>
- * In in its constructor it will only need entity class type (Pojo) and a
- * SessionManager.
- * <p>
- * HbnContainer also expects that identifiers are auto generated. This matters
- * only if HbnContainer is used to create new entities.
- * <p>
- * Note, container caches size, firstId, lastId to be much faster with large
- * datasets. TO DO: make this caching optional, actually should trust on
- * Hibernates and DB engines query caches.
- * 
- * <p>
- * See http://vaadin.com/wiki/-/wiki/Main/Using%20Hibernate%20with%20Vaadin?
- * p_r_p_185834411_title=Using%20Hibernate%20with%20Vaadin for a working example
- * application.
- * 
- * @author Matti Tahvonen (IT Mill)
- * @author Henri Sara (IT Mill)
- * @author Daniel Bell (itree.com.au, bugfixes, support for embedded composite
- *         keys, ability to add non Hibernate-mapped properties)
- * @author Marc Englund (IT Mill, weak item cache to conserve memory/return same
- *         item instance) Update item to reference updated pojo.
- * @author Pavel Micka updateEntity method
- * @author Alejandro Duarte Just changes on visibility of some methods (from private to protected) to allow overriding.
- */
-@SuppressWarnings({"unchecked", "rawtypes", "deprecation"})
-public class CustomHbnContainer<T> implements Container.Indexed, Container.Sortable, Container.ItemSetChangeNotifier,
-		Container.Filterable {
+import enterpriseapp.hibernate.CustomHbnContainer.EntityItem.EntityProperty;
 
-	private static final int REFERENCE_CLEANUP_INTERVAL = 2000;
-	private static Logger logger = LoggerFactory.getLogger(CustomHbnContainer.class);
-	private static final long serialVersionUID = -6410337120924382057L;
+public class CustomHbnContainer<T> implements Container, Container.Indexed, Container.Sortable,
+		Container.Filterable, Container.Hierarchical, Container.ItemSetChangeNotifier, Container.Ordered
+{
+	protected static final long serialVersionUID = -6410337120924382057L;
+	protected ApplicationLogger logger = new ApplicationLogger(CustomHbnContainer.class);
 
-	/**
-	 * SessionManager interface is used by HbnContainer to get reference to
-	 * Hibernates Session object.
-	 */
-	public interface SessionManager {
-		/**
-		 * @return a Hibernate Session with open transaction
-		 */
-		Session getSession();
+	protected SessionFactory sessionFactory;
+	protected ClassMetadata classMetadata;
+	protected Class<T> entityType;
+	protected String parentPropertyName = null;
+	protected static final int ROW_BUF_SIZE = 100;
+	protected static final int ID_TO_INDEX_MAX_SIZE = 300;
+	protected boolean normalOrder = true;
+	protected List<T> ascRowBuffer;
+	protected List<T> descRowBuffer;
+	protected Object lastId;
+	protected Object firstId;
+	protected List<T> indexRowBuffer;
+	protected int indexRowBufferFirstIndex;
+	protected final Map<Object, Integer> idToIndex = new LinkedHashMap<Object, Integer>();
+	protected boolean[] orderAscendings;
+	protected Object[] orderPropertyIds;
+	protected Integer size;
+	protected LinkedList<ItemSetChangeListener> itemSetChangeListeners;
+	protected HashSet<ContainerFilter> filters;
+	protected final Map<String, Class<?>> addedProperties = new HashMap<String, Class<?>>();
+	protected final LoadingCache<Object, EntityItem<T>> cache;
+	protected final HashMap<Object, Boolean> embeddedPropertiesCache = new HashMap<Object, Boolean>();
+	
+	public class StringContainerFilter extends ContainerFilter
+	{
+		public final String filterString;
+		public final String filterString2;
+		public final boolean onlyMatchPrefix;
+		public final boolean ignoreCase;
+
+		public StringContainerFilter(Object propertyId, String filterString, String filterString2, boolean ignoreCase, boolean onlyMatchPrefix)
+		{
+			super(propertyId);
+			this.ignoreCase = ignoreCase;
+			this.filterString = ignoreCase ? filterString.toLowerCase() : filterString;
+			this.filterString2 = ignoreCase ? filterString2.toLowerCase() : filterString2;
+			this.onlyMatchPrefix = onlyMatchPrefix;
+		}
+
+		public Criterion getFieldCriterion(String fullPropertyName)
+		{
+			return (ignoreCase) ? Restrictions.ilike(fullPropertyName, filterString, onlyMatchPrefix ? MatchMode.START
+					: MatchMode.ANYWHERE) : Restrictions.like(fullPropertyName, filterString,
+					onlyMatchPrefix ? MatchMode.START : MatchMode.ANYWHERE);
+		}
 	}
-
+	
 	/**
-	 * Item wrappping a Hibernate mapped entity object. EntityItems are
-	 * generally instantiated automatically by HbnContainer.
+	 * Item wrappping a Hibernate mapped entity object. EntityItems are generally instantiated automatically by
+	 * HbnContainer.
 	 */
 	@SuppressWarnings("hiding")
-	public class EntityItem<T> implements Item {
+	public class EntityItem<T> implements Item
+	{
 
-		private static final long serialVersionUID = -2847179724504965599L;
+		protected static final long serialVersionUID = -2847179724504965599L;
 
 		/**
 		 * Reference to hibernate mapped entity that this Item wraps.
@@ -108,1201 +118,1942 @@ public class CustomHbnContainer<T> implements Container.Indexed, Container.Sorta
 		protected T pojo;
 
 		/**
-		 * Instantiated properties of this EntityItem. May be either
-		 * EntityItemProperty (hibernate field) or manually added container
-		 * property (MethodProperty).
+		 * Instantiated properties of this EntityItem. May be either EntityItemProperty (hibernate field) or manually
+		 * added container property (MethodProperty).
 		 */
-		protected Map<Object, Property> properties = new HashMap<Object, Property>();
+		protected Map<Object, Property<?>> properties = new HashMap<Object, Property<?>>();
 
-		public EntityItem(Serializable id) {
-			pojo = (T) sessionManager.getSession().get(type, id);
+		@SuppressWarnings("unchecked")
+		public EntityItem(Serializable id)
+		{
+			logger.executionTrace();
+
+			pojo = (T) sessionFactory.getCurrentSession().get(entityType, id);
 			// add non-hibernate mapped container properties
-			for (String propertyId : addedProperties.keySet()) {
-				addItemProperty(propertyId, new MethodProperty(pojo, propertyId));
+			for (String propertyId : addedProperties.keySet())
+			{
+				addItemProperty(propertyId, new MethodProperty<Object>(pojo, propertyId));
 			}
 		}
-		
+
 		/**
 		 * @return the wrapped entity object.
 		 */
-		public T getPojo() {
+		public T getPojo()
+		{
+			logger.executionTrace();
 			return pojo;
 		}
 
-		public boolean addItemProperty(Object id, Property property) throws UnsupportedOperationException {
+		@SuppressWarnings("rawtypes")
+		public boolean addItemProperty(Object id, Property property) throws UnsupportedOperationException
+		{
+			logger.executionTrace();
+
 			properties.put(id, property);
 			return true;
 		}
 
-		public Property getItemProperty(Object id) {
-			Property p = properties.get(id);
-			if (p == null) {
-				p = new EntityItemProperty(id.toString());
+		public Property<?> getItemProperty(Object id)
+		{
+			logger.executionTrace();
+
+			Property<?> p = properties.get(id);
+			if (p == null)
+			{
+				p = new EntityProperty(id.toString());
 				properties.put(id, p);
 			}
 			return p;
 		}
 
-		public Collection<?> getItemPropertyIds() {
+		public Collection<?> getItemPropertyIds()
+		{
+			logger.executionTrace();
+
 			return getContainerPropertyIds();
 		}
 
-		public boolean removeItemProperty(Object id) throws UnsupportedOperationException {
-			Property removed = properties.remove(id);
+		public boolean removeItemProperty(Object id) throws UnsupportedOperationException
+		{
+			logger.executionTrace();
+
+			Property<?> removed = properties.remove(id);
 			return removed != null;
 		}
 
 		/**
-		 * EntityItemProperty wraps one Hibernate controlled field of the pojo
-		 * used by EntityItem. For common fields the field value is the same as
-		 * Property value. For relation fields it is the identifier of related
-		 * object or a collection of identifiers.
+		 * EntityItemProperty wraps one Hibernate controlled field of the pojo used by EntityItem. For common fields the
+		 * field value is the same as Property value. For relation fields it is the identifier of related object or a
+		 * collection of identifiers.
+		 * 
+		 * The Property is a simple data object that contains one typed value. This interface contains methods to
+		 * inspect and modify the stored value and its type, and the object's read-only state.
+		 * 
+		 * The Property also defines the events ReadOnlyStatusChangeEvent and ValueChangeEvent, and the associated
+		 * listener and notifier interfaces.
+		 * 
+		 * The Property.Viewer interface should be used to attach the Property to an external data source. This way the
+		 * value in the data source can be inspected using the Property interface.
+		 * 
+		 * The Property.editor interface should be implemented if the value needs to be changed through the implementing
+		 * class.
 		 */
-		public class EntityItemProperty implements Property, Property.ValueChangeNotifier {
+		@SuppressWarnings("rawtypes")
+		public class EntityProperty implements Property, Property.ValueChangeNotifier
+		{
+			protected static final long serialVersionUID = -4086774943938055297L;
+			protected List<ValueChangeListener> valueChangeListeners;
+			protected String propertyName;
 
-			private static final long serialVersionUID = -4086774943938055297L;
-			private final String propertyName;
+			/**
+			 * Default Constructor.
+			 */
+			public EntityProperty(String propertyName)
+			{
+				logger.executionTrace();
 
-			public EntityItemProperty(String propertyName) {
 				this.propertyName = propertyName;
 			}
 
-			public EntityItem<T> getEntityItem() {
+			/**
+			 * This method gets the value that is stored by the property. The returned object is compatible with the
+			 * class returned by getType().
+			 */
+			@SuppressWarnings("unchecked")
+			@Override
+			public Object getValue()
+			{
+				logger.executionTrace();
+
+				final Session session = sessionFactory.getCurrentSession();
+				final SessionImplementor sessionImplementor = (SessionImplementor) session;
+
+				if (!sessionFactory.getCurrentSession().contains(pojo))
+					pojo = (T) session.get(entityType, (Serializable) getIdForPojo(pojo));
+
+				if (propertyInEmbeddedKey(propertyName))
+				{
+					final ComponentType identifierType = (ComponentType) classMetadata.getIdentifierType();
+					final String[] propertyNames = identifierType.getPropertyNames();
+
+					for (int i = 0; i < propertyNames.length; i++)
+					{
+						String name = propertyNames[i];
+
+						if (name.equals(propertyName))
+						{
+							final Object id = classMetadata.getIdentifier(pojo, sessionImplementor);
+							return identifierType.getPropertyValue(id, i, EntityMode.POJO);
+						}
+					}
+				}
+
+				final Type propertyType = getPropertyType();
+				final Object propertyValue = classMetadata.getPropertyValue(pojo, propertyName);
+
+				if (!propertyType.isAssociationType())
+					return propertyValue;
+
+				if (propertyType.isCollectionType())
+				{
+					if (propertyValue == null)
+						return null;
+
+					final HashSet<Serializable> identifiers = new HashSet<Serializable>();
+					final Collection<?> pojos = (Collection<?>) propertyValue;
+
+					for (Object object : pojos)
+					{
+						if (!session.contains(object))
+							object = session.merge(object);
+
+						identifiers.add(session.getIdentifier(object));
+					}
+
+					return identifiers;
+				}
+
+				if (propertyValue == null)
+					return null;
+
+				final Class<?> propertyTypeClass = propertyType.getReturnedClass();
+				final ClassMetadata metadata = sessionFactory.getClassMetadata(propertyTypeClass);
+				final Serializable identifier = metadata.getIdentifier(propertyValue, sessionImplementor);
+
+				return identifier;
+			}
+
+			/**
+			 * This method tests if the Property is in read-only mode. In read-only mode calls to the method setValue
+			 * will throw ReadOnlyException and will not modify the value of the Property.
+			 */
+			@Override
+			public boolean isReadOnly()
+			{
+				logger.executionTrace();
+
+				return false;
+			}
+
+			/**
+			 * This method sets the property's read-only mode to the specified status. This functionality is optional,
+			 * but all properties must implement the isReadOnly mode query correctly.
+			 * 
+			 * HbnContainer does not implement this functionality and will throw an UnsupportedOperationException of
+			 * this method is called.
+			 */
+			@Override
+			public void setReadOnly(boolean newStatus)
+			{
+				throw new UnsupportedOperationException();
+			}
+
+			/**
+			 * This method sets the value of the property.
+			 * 
+			 * Implementing this functionality is optional. If the functionality is missing, one should declare the
+			 * Property to be in read-only mode and throw Property.ReadOnlyException in this function.
+			 * 
+			 * Note : Since Vaadin 7.0, setting the value of a non-String property as a String is no longer supported.
+			 */
+			@Override
+			public void setValue(Object newValue) throws ReadOnlyException, ConversionException
+			{
+				logger.executionTrace();
+
+				try
+				{
+					final Session session = sessionFactory.getCurrentSession();
+					final SessionImplementor sessionImplementor = (SessionImplementor) sessionFactory
+							.getCurrentSession();
+
+					Object value;
+
+					try
+					{
+						if (newValue == null || getType().isAssignableFrom(newValue.getClass()))
+						{
+							value = newValue;
+						}
+						else
+						{
+							final Constructor<?> constr = getType().getConstructor(new Class[] { String.class });
+							value = constr.newInstance(new Object[] { newValue.toString() });
+						}
+
+						if (propertyInEmbeddedKey(propertyName))
+						{
+							final ComponentType identifierType = (ComponentType) classMetadata.getIdentifierType();
+							final String[] propertyNames = identifierType.getPropertyNames();
+
+							for (int i = 0; i < propertyNames.length; i++)
+							{
+								String name = propertyNames[i];
+
+								if (name.equals(propertyName))
+								{
+									final Object identifier = classMetadata.getIdentifier(pojo, sessionImplementor);
+									final Object[] values = identifierType.getPropertyValues(identifier,
+											EntityMode.POJO);
+
+									values[i] = value;
+									identifierType.setPropertyValues(identifier, values, EntityMode.POJO);
+								}
+							}
+						}
+						else
+						{
+							final Type propertyType = classMetadata.getPropertyType(propertyName);
+
+							if (propertyType.isCollectionType())
+							{
+								final Field declaredField = entityType.getDeclaredField(propertyName);
+								final java.lang.reflect.Type genericType = declaredField.getGenericType();
+								final java.lang.reflect.Type[] actualTypeArguments =
+										((ParameterizedType) genericType).getActualTypeArguments();
+								final java.lang.reflect.Type assosiatedType = actualTypeArguments[0];
+								final String typestring = assosiatedType.toString().substring(6);
+
+								// Reuse existing persistent collection if possible so Hibernate may optimize queries
+								// properly.
+
+								@SuppressWarnings("unchecked")
+								Collection<Object> pojoCollection = (Collection<Object>) classMetadata
+										.getPropertyValue(pojo, propertyName);
+
+								if (pojoCollection == null)
+								{
+									pojoCollection = new HashSet<Object>();
+									classMetadata.setPropertyValue(pojo, propertyName, pojoCollection);
+								}
+
+								final Collection<Object> orphans = new HashSet<Object>(pojoCollection);
+								final Collection<?> identifiers = (Collection<?>) value;
+
+								for (Object id : identifiers)
+								{
+									final Object object = session.get(typestring, (Serializable) id);
+									if (!pojoCollection.contains(object))
+									{
+										pojoCollection.add(object);
+									}
+									else
+									{
+										orphans.remove(object);
+									}
+								}
+
+								pojoCollection.removeAll(orphans);
+							}
+							else if (propertyType.isAssociationType())
+							{
+								final Class<?> referencedType = classMetadata
+										.getPropertyType(propertyName)
+										.getReturnedClass();
+
+								final Object object = sessionFactory
+										.getCurrentSession()
+										.get(referencedType, (Serializable) value);
+
+								classMetadata.setPropertyValue(pojo, propertyName, object);
+								sessionFactory.getCurrentSession().merge(object);
+								sessionFactory.getCurrentSession().saveOrUpdate(pojo);
+							}
+							else
+							{
+								classMetadata.setPropertyValue(pojo, propertyName, value);
+							}
+						}
+
+						@SuppressWarnings("unchecked")
+						T newPojo = (T) session.merge(pojo);
+						pojo = newPojo;
+
+						fireValueChange();
+					}
+					catch (Exception e)
+					{
+						logger.error(e);
+						throw new ConversionException(e);
+					}
+				}
+				catch (HibernateException e)
+				{
+					logger.error(e);
+				}
+			}
+
+			/**
+			 * This method registers a new value change listener for this property.
+			 */
+			@Override
+			public void addListener(ValueChangeListener listener)
+			{
+				logger.executionTrace();
+
+				if (valueChangeListeners == null)
+					valueChangeListeners = new LinkedList<ValueChangeListener>();
+
+				if (!valueChangeListeners.contains(listener))
+					valueChangeListeners.add(listener);
+			}
+
+			/**
+			 * This method removes a previously registered value change listener.
+			 */
+			@Override
+			public void removeListener(ValueChangeListener listener)
+			{
+				logger.executionTrace();
+
+				if (valueChangeListeners != null)
+					valueChangeListeners.remove(listener);
+			}
+
+			/**
+			 * This method registers a new value change listener for this property.
+			 */
+			@Override
+			public void addValueChangeListener(ValueChangeListener listener)
+			{
+				logger.executionTrace();
+
+				addListener(listener);
+			}
+
+			/**
+			 * This method removes a previously registered value change listener.
+			 */
+			@Override
+			public void removeValueChangeListener(ValueChangeListener listener)
+			{
+				logger.executionTrace();
+
+				removeListener(listener);
+			}
+
+			/**
+			 * This method returns a string representation of the object. In general, the toString method returns a
+			 * string that "textually represents" this object. The result should be a concise but informative
+			 * representation that is easy for a person to read. It is recommended that all subclasses override this
+			 * method.
+			 * 
+			 * The toString method for class Object returns a string consisting of the name of the class of which the
+			 * object is an instance, the at-sign character `@', and the unsigned hexadecimal representation of the hash
+			 * code of the object. In other words, this method returns a string equal to the value of:
+			 * 
+			 * getClass().getName() + '@' + Integer.toHexString(hashCode())
+			 */
+			@Override
+			public String toString()
+			{
+				logger.executionTrace();
+
+				final Object value = getValue();
+				return (value != null) ? value.toString() : null;
+			}
+
+			/**
+			 * This method returns a reference to the containing EntityItem.
+			 */
+			public EntityItem<T> getEntityItem()
+			{
+				logger.executionTrace();
+
 				return EntityItem.this;
 			}
 
-			public T getPojo() {
+			/**
+			 * This method returns a reference to the associated pojo.
+			 */
+			public T getPojo()
+			{
+				logger.executionTrace();
+
 				return pojo;
 			}
 
 			/**
-			 * A helper method to get raw type of this (Hibernate) property.
-			 * 
-			 * @return the raw type of field
+			 * This method returns the raw type of this property.
 			 */
-			private Type getPropertyType() {
-				return getClassMetadata().getPropertyType(propertyName);
+			protected Type getPropertyType()
+			{
+				logger.executionTrace();
+
+				return classMetadata.getPropertyType(propertyName);
 			}
 
-			private boolean propertyInEmbeddedKey() {
-				// TO DO: a place for optimization, this is not needed to be done
-				// for each separate property
-				Type idType = getClassMetadata().getIdentifierType();
-				if (idType.isComponentType()) {
-					ComponentType idComponent = (ComponentType) idType;
-					String[] idPropertyNames = idComponent.getPropertyNames();
-					List<String> idPropertyNameList = Arrays.asList(idPropertyNames);
-					if (idPropertyNameList.contains(propertyName)) {
-						return true;
-					} else {
-						return false;
-					}
-				} else {
-					return false;
-				}
-			}
+			/**
+			 * Returns the type of the Property. The methods getValue and setValue must be compatible with this type:
+			 * one must be able to safely cast the value returned from getValue to the given type and pass any variable
+			 * assignable to this type as an argument to setValue.
+			 */
+			public Class<?> getType()
+			{
+				logger.executionTrace();
 
-			public Class<?> getType() {
-				// TO DO: clean, optimize, review
+				if (propertyInEmbeddedKey(propertyName))
+				{
+					final ComponentType idType = (ComponentType) classMetadata.getIdentifierType();
+					final String[] propertyNames = idType.getPropertyNames();
 
-				if (propertyInEmbeddedKey()) {
-					ComponentType idType = (ComponentType) getClassMetadata().getIdentifierType();
-					String[] propertyNames = idType.getPropertyNames();
-					for (int i = 0; i < propertyNames.length; i++) {
-						String name = propertyNames[i];
-						if (name.equals(propertyName)) {
-							try {
-								String idName = getClassMetadata().getIdentifierPropertyName();
-								Field idField = type.getDeclaredField(idName);
-								Field propertyField = idField.getType().getDeclaredField(propertyName);
+					for (String name : propertyNames)
+					{
+						if (name.equals(propertyName))
+						{
+							try
+							{
+								final String identifierName = classMetadata.getIdentifierPropertyName();
+								final Field identifierField = entityType.getDeclaredField(identifierName);
+								final Field propertyField = identifierField.getType().getDeclaredField(propertyName);
 								return propertyField.getType();
-							} catch (NoSuchFieldException ex) {
-								throw new RuntimeException("Could not find the type of specified container property.",
-										ex);
+							}
+							catch (NoSuchFieldException e)
+							{
+								logger.error(e);
+								throw new RuntimeException("Failed to find the type of the container property.", e);
 							}
 						}
 					}
 				}
 
-				Type propertyType = getPropertyType();
-				if (propertyType.isCollectionType()) {
-					/*
-					 * For collection types the Property value is the same type
-					 * of collection, but containing identifiers instead of the
-					 * actual referenced objects.
-					 */
-					Class<?> returnedClass = propertyType.getReturnedClass();
+				final Type propertyType = getPropertyType();
+
+				if (propertyType.isCollectionType())
+				{
+					final Class<?> returnedClass = propertyType.getReturnedClass();
 					return returnedClass;
-				} else if (propertyType.isAssociationType()) {
-					/*
-					 * For association the the property value type is the type
-					 * of referenced types identifier. Use Hibernates
-					 * ClassMetadata for referenced type and get the type of its
-					 * identifier.
-					 */
-					// TO DO: clean, optimize, review, this could be optimized
-					// among similar properties
-					ClassMetadata classMetadata2 = sessionManager.getSession().getSessionFactory()
-							.getClassMetadata(getClassMetadata().getPropertyType(propertyName).getReturnedClass());
-					return classMetadata2.getIdentifierType().getReturnedClass();
+				}
 
-				} else {
-					/*
-					 * For basic fields the Property type is the same as the
-					 * type in entity class.
-					 */
-					return getClassMetadata().getPropertyType(propertyName).getReturnedClass();
+				if (propertyType.isAssociationType())
+				{
+					// For association the the property value type is the type of referenced types identifier.
+					final ClassMetadata metadata = sessionFactory.getClassMetadata(
+							classMetadata.getPropertyType(propertyName).getReturnedClass());
+
+					return metadata.getIdentifierType().getReturnedClass();
+				}
+
+				return classMetadata.getPropertyType(propertyName).getReturnedClass();
+			}
+
+			/**
+			 * Implements a value change event.
+			 */
+			protected class HbnPropertyValueChangeEvent implements Property.ValueChangeEvent
+			{
+				protected static final long serialVersionUID = 166764621324404579L;
+
+				public Property<?> getProperty()
+				{
+					return EntityProperty.this;
 				}
 			}
 
-			public Object getValue() {
+			/**
+			 * This method is used to fire a value change event.
+			 */
+			protected void fireValueChange()
+			{
+				logger.executionTrace();
+				if (valueChangeListeners != null)
+				{
+					final HbnPropertyValueChangeEvent event = new HbnPropertyValueChangeEvent();
+					final Object[] array = valueChangeListeners.toArray();
 
-				// TO DO: clean, optimize, review
-
-				// Ensure we have an attached pojo
-				if (!sessionManager.getSession().contains(pojo)) {
-					pojo = (T) sessionManager.getSession().get(type, (Serializable) getIdForPojo(pojo));
-				}
-
-				if (propertyInEmbeddedKey()) {
-					ComponentType idType = (ComponentType) getClassMetadata().getIdentifierType();
-					String[] propertyNames = idType.getPropertyNames();
-					for (int i = 0; i < propertyNames.length; i++) {
-						String name = propertyNames[i];
-						if (name.equals(propertyName)) {
-							Object id = getClassMetadata().getIdentifier(pojo, EntityMode.POJO);
-							return idType.getPropertyValue(id, i, EntityMode.POJO);
-						}
-					}
-				}
-
-				Type propertyType = getPropertyType();
-				Object propertyValue = getClassMetadata().getPropertyValue(pojo, propertyName, EntityMode.POJO);
-
-				if (!propertyType.isAssociationType()) {
-					return propertyValue;
-				} else if (propertyType.isCollectionType()) {
-					if (propertyValue == null) {
-						return null;
-					}
-
-					/*
-					 * Build a HashSet of identifiers of entities stored in
-					 * collection.
-					 */
-					HashSet<Serializable> identifiers = new HashSet<Serializable>();
-					Collection<?> pojos = (Collection) propertyValue;
-
-					for (Object object : pojos) {
-						// here, object must be of an association type
-						if (!sessionManager.getSession().contains(object)) {
-							// ensure a fresh object if session contains the
-							// object
-							object = sessionManager.getSession().merge(object);
-						}
-						identifiers.add(sessionManager.getSession().getIdentifier(object));
-					}
-					return identifiers;
-				} else {
-					/*
-					 * the return value will be the identifier of referenced
-					 * object
-					 */
-					if (propertyValue == null) {
-						return null;
-					}
-					Class<?> propertyTypeClass = propertyType.getReturnedClass();
-
-					ClassMetadata classMetadata2 = sessionManager.getSession().getSessionFactory()
-							.getClassMetadata(propertyTypeClass);
-
-					Serializable identifier = classMetadata2.getIdentifier(propertyValue, EntityMode.POJO);
-					return identifier;
-				}
-			}
-
-			public boolean isReadOnly() {
-				// TO DO:
-				return false;
-			}
-
-			public void setReadOnly(boolean newStatus) {
-				throw new UnsupportedOperationException();
-			}
-
-			public void setValue(Object newValue) throws ReadOnlyException, ConversionException {
-
-				try {
-					Object value;
-					try {
-						if (newValue == null || getType().isAssignableFrom(newValue.getClass())) {
-							value = newValue;
-						} else {
-							// Gets the string constructor
-							final Constructor<?> constr = getType().getConstructor(new Class[] { String.class });
-
-							value = constr.newInstance(new Object[] { newValue.toString() });
-						}
-
-						// TO DO: same optimizations (caching introspection of
-						// types) as in getType and getValue
-						// could be done here.
-
-						if (propertyInEmbeddedKey()) {
-							ComponentType idType = (ComponentType) getClassMetadata().getIdentifierType();
-							String[] propertyNames = idType.getPropertyNames();
-							for (int i = 0; i < propertyNames.length; i++) {
-								String name = propertyNames[i];
-								if (name.equals(propertyName)) {
-									Object id = getClassMetadata().getIdentifier(pojo, EntityMode.POJO);
-									Object[] values = idType.getPropertyValues(id, EntityMode.POJO);
-									values[i] = value;
-									idType.setPropertyValues(id, values, EntityMode.POJO);
-								}
-							}
-						} else {
-							Type propertyType = getClassMetadata().getPropertyType(propertyName);
-							if (propertyType.isCollectionType()) {
-								/*
-								 * Value is a collection of identifiers of
-								 * referenced objects.
-								 */
-								// TO DO: figure out how to fetch mapped type
-								// properly
-								Field declaredField = type.getDeclaredField(propertyName);
-								java.lang.reflect.Type genericType = declaredField.getGenericType();
-								java.lang.reflect.Type[] actualTypeArguments = ((ParameterizedType) genericType)
-										.getActualTypeArguments();
-
-								java.lang.reflect.Type assosiatedType = actualTypeArguments[0];
-								String typestring = assosiatedType.toString().substring(6);
-
-								/*
-								 * Reuse existing persistent collection if
-								 * possible so Hibernate may optimize queries
-								 * properly.
-								 */
-								Collection<Object> pojoCollection = (Collection<Object>) getClassMetadata()
-										.getPropertyValue(pojo, propertyName, EntityMode.POJO);
-								if (pojoCollection == null) {
-									pojoCollection = new HashSet<Object>();
-									getClassMetadata().setPropertyValue(pojo, propertyName, pojoCollection,
-											EntityMode.POJO);
-								}
-								// copy existing set, so we can track which are
-								// to be removed
-								Collection<Object> orphans = new HashSet<Object>(pojoCollection);
-
-								Collection<?> identifiers = (Collection<?>) value;
-								Session session = sessionManager.getSession();
-								// add missing objects
-								for (Object id : identifiers) {
-									Object object = session.get(typestring, (Serializable) id);
-									if (!pojoCollection.contains(object)) {
-										pojoCollection.add(object);
-									} else {
-										orphans.remove(object);
-									}
-								}
-								// remove the ones that are no more supposed to
-								// be in collection
-								pojoCollection.removeAll(orphans);
-
-							} else if (propertyType.isAssociationType()) {
-								/*
-								 * Property value is identifier, convert to the
-								 * referenced type
-								 */
-								Class<?> referencedType = getClassMetadata().getPropertyType(propertyName)
-										.getReturnedClass();
-								Object object = sessionManager.getSession().get(referencedType, (Serializable) value);
-								getClassMetadata().setPropertyValue(pojo, propertyName, object, EntityMode.POJO);
-								// TO DO: check if these are needed
-								sessionManager.getSession().merge(object);
-								sessionManager.getSession().saveOrUpdate(pojo);
-
-							} else {
-								getClassMetadata().setPropertyValue(pojo, propertyName, value, EntityMode.POJO);
-							}
-						}
-						// Persist (possibly) detached pojo
-						T newPojo = (T) sessionManager.getSession().merge(pojo);
-						pojo = newPojo;
-
-						fireValueChange();
-
-					} catch (final java.lang.Exception e) {
-						logger.error("Error.", e);
-						logger.error("Error.", e);
-						throw new Property.ConversionException(e);
-					}
-
-				} catch (HibernateException e) {
-					logger.error("Error.", e);
-				}
-			}
-
-			@Override
-			public String toString() {
-				Object v = getValue();
-				if (v != null) {
-					return v.toString();
-				} else {
-					return null;
-				}
-			}
-
-			private class HbnPropertyValueChangeEvent implements Property.ValueChangeEvent {
-				private static final long serialVersionUID = 166764621324404579L;
-
-				public Property getProperty() {
-					return EntityItemProperty.this;
-				}
-			}
-
-			private List<ValueChangeListener> valueChangeListeners;
-
-			private void fireValueChange() {
-				if (valueChangeListeners != null) {
-					HbnPropertyValueChangeEvent event = new HbnPropertyValueChangeEvent();
-					Object[] array = valueChangeListeners.toArray();
-					for (int i = 0; i < array.length; i++) {
-						((ValueChangeListener) array[i]).valueChange(event);
+					for (int i = 0; i < array.length; i++)
+					{
+						final ValueChangeListener listener = (ValueChangeListener) array[i];
+						listener.valueChange(event);
 					}
 				}
 			}
-
-			public void addListener(ValueChangeListener listener) {
-				if (valueChangeListeners == null) {
-					valueChangeListeners = new LinkedList<ValueChangeListener>();
-				}
-				if (!valueChangeListeners.contains(listener)) {
-					valueChangeListeners.add(listener);
-				}
-			}
-
-			public void removeListener(ValueChangeListener listener) {
-				if (valueChangeListeners != null) {
-					valueChangeListeners.remove(listener);
-				}
-			}
-
 		}
 	}
 
-	private static final int ROW_BUF_SIZE = 100;
-	private static final int ID_TO_INDEX_MAX_SIZE = 300;
-
-	/** Entity class that will be listed in container */
-	protected Class<T> type;
-	protected final SessionManager sessionManager;
-	private transient ClassMetadata classMetadata;
-
-	/** internal flag used to temporarily invert order of listing */
-	private boolean normalOrder = true;
-
-	/** Row buffer of pojos, used to optimize query count when iterating forward */
-	private List<T> ascRowBuffer;
 	/**
-	 * Row buffer of pojos, used to optimize query count when iterating backward
+	 * Constructor creates a new instance of HbnContainer.
 	 */
+	public CustomHbnContainer(Class<T> entityType, SessionFactory sessionFactory)
+	{
+		logger.executionTrace();
 
-	private List<T> descRowBuffer;
-	/** cached last item identifier */
-	private Object lastId;
-	/** cached first item identifier */
-	private Object firstId;
+		this.entityType = entityType;
+		this.sessionFactory = sessionFactory;
+		this.classMetadata = sessionFactory.getClassMetadata(entityType);
 
-	/**
-	 * Row buffer of pojos, used to optimize query count when container is
-	 * accessed with indexes
-	 */
-	private List<T> indexRowBuffer;
-
-	/** Container wide index of the first entity in indexRowBuffer */
-	private int indexRowBufferFirstIndex;
-
-	/**
-	 * Map from entity/item identifiers to index. Maps does not contain mapping
-	 * for all identifiers in container, but only those that are recently
-	 * loaded. Map gets cleanded during usage, to free memory.
-	 */
-	private final Map<Object, Integer> idToIndex = new LinkedHashMap<Object, Integer>();
+		this.cache = CacheBuilder.newBuilder()
+				.expireAfterAccess(2, TimeUnit.MINUTES)
+				.maximumSize(10000)
+				.recordStats()
+				.weakValues()
+				.build(new CacheLoader<Object, EntityItem<T>>()
+				{
+					@Override
+					public EntityItem<T> load(Object entityId) throws Exception
+					{
+						try
+						{
+							return loadEntity((Serializable) entityId);
+						}
+						catch (Exception e)
+						{
+							logger.error(e);
+							throw e;
+						}
+					}
+				});
+	}
 
 	/**
-	 * whether sorts are made ascending or descending, see
-	 * {@link #orderPropertyIds}
+	 * This method is used to load an entity from the database. This method is called automatically by the cache loader
+	 * when it needs to load an entity into the cache but it can be called manually if necessary.
 	 */
-	private boolean[] orderAscendings;
-	/**
-	 * Properties among container is sorted by. Used to implement
-	 * Container.Sortable
-	 */
-	private Object[] orderPropertyIds;
+	protected EntityItem<T> loadEntity(Serializable entityId)
+	{
+		logger.executionTrace();
 
-	/** Cached size of container. Used to optimize query count. */
-	private Integer size;
+		EntityItem<T> entity = null;
 
-	private LinkedList<ItemSetChangeListener> itemSetChangeListeners;
+		if (entityId != null)
+			entity = new EntityItem<T>(entityId);
 
-	/**
-	 * Contains current filters which has been applied to this container. Used
-	 * to implement Container.Filterable.
-	 */
-	protected HashSet<ContainerFilter> filters;
-
-	/** Caches weak references to items, in order to conserve memory. */
-	private transient HashMap<Object, WeakReference<EntityItem<T>>> itemCache;
-
-	/** A map of added javabean property names to their respective types */
-	private final Map<String, Class<?>> addedProperties = new HashMap<String, Class<?>>();
+		return entity;
+	}
 
 	/**
-	 * counter for items loaded by container, used to implement cleanup of
-	 * weakreferences
+	 * This method is used to save an entity to the database and in the process it will fire an item set change event.
 	 */
-	private int loadCount;
+	public Serializable saveEntity(T entity)
+	{
+		logger.executionTrace();
 
-	private HashMap<Object, WeakReference<EntityItem<T>>> getItemCache() {
-		if(itemCache == null) {
-			itemCache = new HashMap<Object, WeakReference<EntityItem<T>>>();
+		final Session session = sessionFactory.getCurrentSession();
+		final Object entityId = session.save(entity);
+
+		clearInternalCache();
+		fireItemSetChange();
+
+		return (Serializable) entityId;
+	}
+
+	/**
+	 * This method is used to update an entity in the database, update the cache and fire value change events when
+	 * necessary.
+	 */
+	public Serializable updateEntity(T entity)
+	{
+		logger.executionTrace();
+
+		final Session session = sessionFactory.getCurrentSession();
+		session.update(entity);
+
+		final Object entityId = getIdForPojo(entity);
+		final EntityItem<T> cachedEntity = cache.getIfPresent(entityId);
+
+		cache.refresh(entityId);
+
+		if (cachedEntity != null)
+		{
+			for (Object propertyId : cachedEntity.getItemPropertyIds())
+			{
+				Property<?> cachedProperty = cachedEntity.getItemProperty(propertyId);
+				if (cachedProperty instanceof EntityItem.EntityProperty)
+				{
+					@SuppressWarnings("rawtypes")
+					EntityProperty entityProperty = (EntityProperty) cachedProperty;
+					entityProperty.fireValueChange();
+				}
+			}
 		}
-		
-		return itemCache;
+
+		return (Serializable) entityId;
 	}
 
 	/**
-	 * Creates a new instance of HbnContainer, listing all object of given type
-	 * from database.
-	 * 
-	 * @param entityType
-	 *            Entity class to be listed in container.
-	 * @param sessionMgr
-	 *            interface via Hibernate session is fetched
+	 * This method adds a new property to all items in the container. The property id, data type and default value of
+	 * the new Property are given as parameters. HbnContainer automatically adds all fields that are mapped by Hibernate
+	 * to the database. With this method we can add a property to the container that is contained in the pojo but not
+	 * Hibernate mapped.
 	 */
-	public CustomHbnContainer(Class<T> entityType, SessionManager sessionMgr) {
-		type = entityType;
-		sessionManager = sessionMgr;
-	}
+	@Override
+	public boolean addContainerProperty(Object propertyId, Class<?> classType, Object defaultValue)
+			throws UnsupportedOperationException
+	{
+		logger.executionTrace();
 
-	/**
-	 * HbnContainer automatically adds all fields that are mapped by Hibernate
-	 * to DB. With this method one can add a javabean property to the container
-	 * that is contained on pojo but not hibernate-mapped.
-	 * 
-	 * @see Container#addContainerProperty(Object, Class, Object)
-	 */
-	public boolean addContainerProperty(Object propertyId, Class<?> type, Object defaultValue)
-			throws UnsupportedOperationException {
 		boolean propertyExists = true;
-		try {
-			new MethodProperty(this.type.newInstance(), propertyId.toString());
-		} catch (InstantiationException ex) {
-			ex.printStackTrace();
-			propertyExists = false;
-		} catch (IllegalAccessException ex) {
-			ex.printStackTrace();
+
+		try
+		{
+			new MethodProperty<Object>(this.entityType.newInstance(), propertyId.toString());
+		}
+		catch (Exception e)
+		{
+			logger.debug("Note: this is not an error: " + e);
 			propertyExists = false;
 		}
-		addedProperties.put(propertyId.toString(), type);
+
+		addedProperties.put(propertyId.toString(), classType);
 		return propertyExists;
 	}
 
 	/**
-	 * HbnContainer specific method to persist newly created entity.
-	 * 
-	 * @param entity
-	 *            the unsaved entity object
-	 * @return the identifier for newly persisted entity
+	 * Creates a new Item into the Container and assigns it an automatic ID. The new ID is returned, or null if the
+	 * operation fails. After a successful call you can use the getItemmethod to fetch the Item. This functionality is
+	 * optional.
 	 */
-	public Serializable saveEntity(T entity) {
-		// insert into DB
-		sessionManager.getSession().save(entity);
-		clearInternalCache();
-		fireItemSetChange();
-		return (Serializable) getIdForPojo(entity);
+	@Override
+	public Object addItem() throws UnsupportedOperationException
+	{
+		logger.executionTrace();
+
+		try
+		{
+			final T entity = entityType.newInstance();
+			return saveEntity(entity);
+		}
+		catch (Exception e)
+		{
+			logger.error(e);
+			return null;
+		}
 	}
 
 	/**
-	 * HbnContainer specific method to update entity.
+	 * Creates a new Item with the given ID in the Container. The new Item is returned, and it is ready to have its
+	 * Properties modified. Returns null if the operation fails or the Container already contains a Item with the given
+	 * ID. This functionality is optional.
 	 * 
-	 * @param entity
-	 *            to update
-	 * @return the identifier of the updated entity
+	 * Note that in this implementation we are expecting auto-generated identifiers so this method is not implemented.
 	 */
-	public Serializable updateEntity(T entity) {
-		// update DB
-		sessionManager.getSession().save(entity);
-
-		EntityItem<T> item = null;
-		Serializable itemId = (Serializable) getIdForPojo(entity);
-
-		if (getItemCache() != null) {
-			// refresh itemCache
-			WeakReference<EntityItem<T>> weakReference = getItemCache().get(itemId);
-			if (weakReference != null) {
-				item = weakReference.get();
-				if (item != null) { // may be already collected, but not cleaned
-					item.pojo = entity;
-				}
-			}
-		}
-
-		if (item != null) { // if it was in cache, it might be rendered
-			// fire change events on this item, properties might have changed
-			for (Object id : item.getItemPropertyIds()) {
-				Property p = item.getItemProperty(id);
-				if (p instanceof EntityItem.EntityItemProperty) {
-					EntityItem.EntityItemProperty ep = (EntityItem.EntityItemProperty) p;
-					ep.fireValueChange();
-				}
-			}
-		}
-
-		return itemId;
-	}
-
-	public Object addItem() throws UnsupportedOperationException {
-		Object o;
-		try {
-			// create a new instance of entity type
-			o = type.newInstance();
-			// insert into DB
-			sessionManager.getSession().save(o);
-			// we need to clear internal caches of HbnContainer
-			clearInternalCache();
-			// notify listeners that a new item has been added, will cause eg.
-			// Table refresh
-			fireItemSetChange();
-			return getIdForPojo(o);
-		} catch (InstantiationException e) {
-			logger.error("Error.", e);
-			return null;
-		} catch (IllegalAccessException e) {
-			logger.error("Error.", e);
-			return null;
-		}
-	}
-
-	public Item addItem(Object itemId) throws UnsupportedOperationException {
-		// Expecting autogenerated identifiers
+	@Override
+	public Item addItem(Object entityId) throws UnsupportedOperationException
+	{
 		throw new UnsupportedOperationException();
 	}
 
-	public boolean containsId(Object itemId) {
-		// test if entity can be found with given id
-		try {
-			return (sessionManager.getSession().get(type, (Serializable) itemId) != null);
-		} catch (Exception e) {
-			// this should not happen if used correctly
-			logger.error("Error.", e);
+	/**
+	 * Tests if the Container contains the specified Item. Filtering can hide items so that they will not be visible
+	 * through the container API, and this method should respect visibility of items (i.e. only indicate visible items
+	 * as being in the container) if feasible for the container.
+	 */
+	@Override
+	public boolean containsId(Object entityId)
+	{
+		logger.executionTrace();
+
+		try
+		{
+			final EntityItem<T> entity = cache.get(entityId);
+			return (entity != null);
+		}
+		catch (Exception e)
+		{
+			logger.error(e);
 			return false;
 		}
 	}
 
-	public Property getContainerProperty(Object itemId, Object propertyId) {
-		return getItem(itemId).getItemProperty(propertyId);
+	/**
+	 * Gets the Property identified by the given entityId and propertyId from the Container. If the Container does not
+	 * contain the item or it is filtered out, or the Container does not have the Property, null is returned.
+	 */
+	@Override
+	public Property<?> getContainerProperty(Object entityId, Object propertyId)
+	{
+		logger.executionTrace();
+
+		try
+		{
+			EntityItem<?> entity = cache.get(entityId);
+			Property<?> property = entity.getItemProperty(propertyId);
+			return property;
+		}
+		catch (Exception e)
+		{
+			logger.error(e);
+			return null;
+		}
 	}
 
-	public Collection getContainerPropertyIds() {
-		Collection propertyIds = getSortableContainerPropertyIds();
+	/**
+	 * Gets the ID's of all Properties stored in the Container. The ID's cannot be modified through the returned
+	 * collection.
+	 */
+	@Override
+	public Collection<String> getContainerPropertyIds()
+	{
+		logger.executionTrace();
+
+		Collection<String> propertyIds = getSortableContainerPropertyIds();
 		propertyIds.addAll(addedProperties.keySet());
 		return propertyIds;
 	}
 
-	private Collection<String> getEmbeddedKeyPropertyIds() {
-		ArrayList<String> embeddedKeyPropertyIds = new ArrayList<String>();
-		Type identifierType = getClassMetadata().getIdentifierType();
-		if (identifierType.isComponentType()) {
-			ComponentType idComponent = (ComponentType) identifierType;
-			String[] propertyNameArray = idComponent.getPropertyNames();
-			if (propertyNameArray != null) {
-				List<String> propertyNames = Arrays.asList(propertyNameArray);
+	/**
+	 * This is an HbnContainer specific utility method that is used to retrieve the list of embedded property key
+	 * identifiers.
+	 */
+	protected Collection<String> getEmbeddedKeyPropertyIds()
+	{
+		logger.executionTrace();
+
+		final ArrayList<String> embeddedKeyPropertyIds = new ArrayList<String>();
+		final Type identifierType = classMetadata.getIdentifierType();
+
+		if (identifierType.isComponentType())
+		{
+			final ComponentType idComponent = (ComponentType) identifierType;
+			final String[] propertyNameArray = idComponent.getPropertyNames();
+
+			if (propertyNameArray != null)
+			{
+				final List<String> propertyNames = Arrays.asList(propertyNameArray);
 				embeddedKeyPropertyIds.addAll(propertyNames);
 			}
 		}
+
 		return embeddedKeyPropertyIds;
 	}
 
 	/**
-	 * Helper method to get the Hibernate ClassMetadata for listed entity type.
-	 * Method lazyly caches the metadata, optimizing the lookup a bit (instead
-	 * of fetching it continuously from Session).
-	 * 
-	 * @return Hibernates ClassMetadata for the listed entity type
+	 * Gets the Item with the given Item ID from the Container. If the Container does not contain the requested Item,
+	 * null is returned. Containers should not return Items that are filtered out.
 	 */
-	protected ClassMetadata getClassMetadata() {
-		if (classMetadata == null) {
-			classMetadata = sessionManager.getSession().getSessionFactory().getClassMetadata(type);
-		}
-		return classMetadata;
-	}
+	@Override
+	public EntityItem<T> getItem(Object entityId)
+	{
+		logger.executionTrace();
 
-	public EntityItem<T> getItem(Object itemId) {
-		EntityItem<T> item = null;
-		if (itemId != null) {
-			item = loadItem((Serializable) itemId);
+		try
+		{
+			return cache.get(entityId);
 		}
-		return item;
+		catch (ExecutionException e)
+		{
+			logger.error(e);
+			return null;
+		}
 	}
 
 	/**
-	 * This method is used to fetch Items by id. Override this if you need
-	 * customized EntityItems.
+	 * Gets the ID's of all visible (after filtering and sorting) Items stored in the Container. The ID's cannot be
+	 * modified through the returned collection. If the container is Container.Ordered, the collection returned by this
+	 * method should follow that order. If the container is Container.Sortable, the items should be in the sorted order.
+	 * Calling this method for large lazy containers can be an expensive operation and should be avoided when practical.
 	 * 
-	 * @param itemId
-	 * @return
+	 * Create an optimized query to return only identifiers. Note that this method does not scale well for large
+	 * database. At least Table is optimized so that it does not call this method.
 	 */
-	protected EntityItem<T> loadItem(Serializable itemId) {
-		// clean up refQue if there are some items to clean up
-		cleanCache();
+	@Override
+	public Collection<?> getItemIds()
+	{
+		logger.executionTrace();
 
-		EntityItem<T> item;
-		// Search the itemCache if the entityitem is already loaded
-		WeakReference<EntityItem<T>> weakReference = getItemCache().get(itemId);
-		if (weakReference != null) {
-			item = weakReference.get();
-			// still check if weakreference still contained the item (may be
-			// carbagecollected, but not cleand from cache map
-			if (item != null) {
-				// return the previously instantiated entityitem
-				return item;
-			}
-		}
-
-		item = new EntityItem<T>(itemId);
-		getItemCache().put(itemId, new WeakReference<EntityItem<T>>(item));
-		return item;
+		// TODO: BUG: does not preserve sort order!
+		final Criteria criteria = getCriteria();
+		criteria.setProjection(Projections.id());
+		return criteria.list();
 	}
 
 	/**
-	 * Cleans the itemCache of collected item references. This method run every
-	 * now and then by {@link #loadItem(Serializable)}, but may be run manually
-	 * too.
+	 * Get numberOfItems consecutive item ids from the container, starting with the item id at startIndex.
 	 * 
-	 * <p>
-	 * TO DO: figure out if this is the best possible way to free the memory
-	 * consumed by (empty) weak references and open this mechanism for extension
+	 * Implementations should return at most numberOfItems item ids, but can contain less if the container has less
+	 * items than required to fulfill the request. The returned list must hence contain all of the item ids from the
+	 * range:
 	 * 
+	 * startIndex to max(startIndex + (numberOfItems-1), container.size()-1).
 	 */
-	private void cleanCache() {
-		if (++loadCount % REFERENCE_CLEANUP_INTERVAL == 0) {
-			Set<Entry<Object, WeakReference<EntityItem<T>>>> entries = getItemCache().entrySet();
-			for (Iterator<Entry<Object, WeakReference<EntityItem<T>>>> iterator = entries.iterator(); iterator
-					.hasNext();) {
-				Entry<Object, WeakReference<EntityItem<T>>> entry = iterator.next();
-				if (entry.getValue().get() == null) {
-					// if the referenced entityitem is carbage collected, remove
-					// the weak reference itself
-					iterator.remove();
-				}
-			}
-		}
+	@Override
+	public List<?> getItemIds(int startIndex, int count)
+	{
+		logger.executionTrace();
+
+		final List<?> entityIds = (List<?>) getItemIds();
+		return entityIds.subList(startIndex, startIndex + count);
 	}
 
-	public Collection<?> getItemIds() {
-		/*
-		 * Create an optimized query to return only identifiers. Note that this
-		 * method does not scale well for large database. At least Table is
-		 * optimized so that it does not call this method.
-		 */
-		Criteria crit = getCriteria();
-		
-		while(crit.getClass().equals(Subcriteria.class)) {
-			crit = ((Subcriteria) crit).getParent();
-		}
-		crit.setProjection(Projections.id());
-		
-		return crit.list();
-	}
+	/**
+	 * Gets the data type of all Properties identified by the given Property ID. This method does pretty much the same
+	 * thing as EntityItemProperty#getType()
+	 */
+	public Class<?> getType(Object propertyId)
+	{
+		logger.executionTrace();
 
-	public Class<?> getType(Object propertyId) {
-		/*
-		 * This method does pretty much the same thing as
-		 * EntityItemProperty#getType()
-		 * 
-		 * TO DO: refactor to use same code, will also fix incomplete
-		 * implementation of this method (for assosiation types). Not critical
-		 * as componets don't really rely on this methods.
-		 */
-		if (addedProperties.keySet().contains(propertyId)) {
+		// TODO: refactor to use same code as EntityItemProperty#getType()
+		// This will also fix incomplete implementation of this method (for association types). Not critical as
+		// Components don't really rely on this methods.
+
+		if (addedProperties.keySet().contains(propertyId))
 			return addedProperties.get(propertyId);
-		} else if (propertyInEmbeddedKey(propertyId)) {
-			ComponentType idType = (ComponentType) getClassMetadata().getIdentifierType();
-			String[] propertyNames = idType.getPropertyNames();
-			for (int i = 0; i < propertyNames.length; i++) {
+
+		if (propertyInEmbeddedKey(propertyId))
+		{
+			final ComponentType idType = (ComponentType) classMetadata.getIdentifierType();
+			final String[] propertyNames = idType.getPropertyNames();
+
+			for (int i = 0; i < propertyNames.length; i++)
+			{
 				String name = propertyNames[i];
-				if (name.equals(propertyId)) {
-					String idName = getClassMetadata().getIdentifierPropertyName();
-					try {
-						Field idField = type.getDeclaredField(idName);
+				if (name.equals(propertyId))
+				{
+					String idName = classMetadata.getIdentifierPropertyName();
+					try
+					{
+						Field idField = entityType.getDeclaredField(idName);
 						Field propertyField = idField.getType().getDeclaredField((String) propertyId);
 						return propertyField.getType();
-					} catch (NoSuchFieldException ex) {
+					}
+					catch (NoSuchFieldException ex)
+					{
 						throw new RuntimeException("Could not find the type of specified container property.", ex);
 					}
 				}
 			}
 		}
-		Type propertyType = getClassMetadata().getPropertyType(propertyId.toString());
+
+		Type propertyType = classMetadata.getPropertyType(propertyId.toString());
 		return propertyType.getReturnedClass();
 	}
 
 	/**
-	 * TO DO: combine with the very same method from EntityItemProperty
-	 * 
-	 * @param propertyId
-	 * @return true if property is part of embedded key of entity
+	 * Removes all Items from the Container. Note that Property ID and type information is preserved. This functionality
+	 * is optional.
 	 */
-	protected boolean propertyInEmbeddedKey(Object propertyId) {
-		Type idType = getClassMetadata().getIdentifierType();
-		if (idType.isComponentType()) {
-			ComponentType idComponent = (ComponentType) idType;
-			String[] idPropertyNames = idComponent.getPropertyNames();
-			List<String> idPropertyNameList = Arrays.asList(idPropertyNames);
-			if (idPropertyNameList.contains(propertyId)) {
-				return true;
-			} else {
-				return false;
+	@Override
+	public boolean removeAllItems() throws UnsupportedOperationException
+	{
+		logger.executionTrace();
+
+		try
+		{
+			final Session session = sessionFactory.getCurrentSession();
+			final Query query = session.createQuery("DELETE FROM " + entityType.getSimpleName());
+
+			final int deleted = query.executeUpdate();
+			cache.invalidateAll();
+
+			if (deleted > 0)
+			{
+				clearInternalCache();
+				fireItemSetChange();
 			}
-		} else {
+
+			return (size() == 0);
+		}
+		catch (Exception e)
+		{
+			logger.error(e);
 			return false;
 		}
 	}
 
-	public boolean removeAllItems() throws UnsupportedOperationException {
-		// TO DO:
-		return false;
+	/**
+	 * Removes a Property specified by the given Property ID from the Container. Note that the Property will be removed
+	 * from all Items in the Container. This functionality is optional.
+	 */
+	@Override
+	public boolean removeContainerProperty(Object propertyId) throws UnsupportedOperationException
+	{
+		logger.executionTrace();
+
+		final Class<?> removed = addedProperties.remove(propertyId);
+		return (removed != null);
 	}
 
-	/* Remove a container property added with addContainerProperty() */
-	public boolean removeContainerProperty(Object propertyId) throws UnsupportedOperationException {
-		boolean propertyExisted = false;
-		Class<?> removed = addedProperties.remove(propertyId);
-		if (removed != null) {
-			propertyExisted = true;
-		}
-		return propertyExisted;
-	}
+	/**
+	 * Removes the Item identified by entityId from the Container. Containers that support filtering should also allow
+	 * removing an item that is currently filtered out. This functionality is optional.
+	 * 
+	 * Note that this method recursively removes all children of this entity before removing this entity.
+	 */
+	@Override
+	public boolean removeItem(Object entityId) throws UnsupportedOperationException
+	{
+		logger.executionTrace();
 
-	public boolean removeItem(Object itemId) throws UnsupportedOperationException {
-		if(itemId != null) {
-			Object p = sessionManager.getSession().load(type, (Serializable) itemId);
-			// remove row from db
-			sessionManager.getSession().delete(p);
-			// clear internal caches and notify listeners that item has been removed
-			clearInternalCache();
-			fireItemSetChange();
-		}
-		
+		for (Object id : getChildren(entityId))
+			removeItem(id);
+
+		final Session session = sessionFactory.getCurrentSession();
+		final Object entity = session.load(entityType, (Serializable) entityId);
+
+		session.delete(entity);
+		cache.invalidate(entityId);
+
+		clearInternalCache();
+		fireItemSetChange();
+
 		return true;
 	}
 
-	public void addListener(ItemSetChangeListener listener) {
-		if (itemSetChangeListeners == null) {
-			itemSetChangeListeners = new LinkedList<ItemSetChangeListener>();
-		}
-		itemSetChangeListeners.add(listener);
-	}
+	/**
+	 * Gets the number of visible Items in the Container. Filtering can hide items so that they will not be visible
+	 * through the container API.
+	 */
+	@Override
+	public int size()
+	{
+		logger.executionTrace();
 
-	public void removeListener(ItemSetChangeListener listener) {
-		if (itemSetChangeListeners != null) {
-			itemSetChangeListeners.remove(listener);
-		}
+		size = ((Number) getBaseCriteria()
+				.setProjection(Projections.rowCount())
+				.uniqueResult())
+				.intValue();
 
-	}
-
-	protected void fireItemSetChange() {
-		if (itemSetChangeListeners != null) {
-			final Object[] l = itemSetChangeListeners.toArray();
-			final Container.ItemSetChangeEvent event = new Container.ItemSetChangeEvent() {
-				private static final long serialVersionUID = -3002746333251784195L;
-
-				public Container getContainer() {
-					return CustomHbnContainer.this;
-				}
-			};
-			for (int i = 0; i < l.length; i++) {
-				((ItemSetChangeListener) l[i]).containerItemSetChange(event);
-			}
-		}
-	}
-
-	public int size() {
-		if (size == null) {
-			/*
-			 * If cached size does not exist, query from database
-			 */
-			size = ((Number) getBaseCriteria().setProjection(Projections.rowCount()).uniqueResult()).intValue();
-		}
 		return size.intValue();
 	}
 
-	public Object addItemAfter(Object previousItemId) throws UnsupportedOperationException {
-		// can't implement properly for database backed container like this
+	/**
+	 * Adds a new item after the given item. Adding an item after null item adds the item as first item of the ordered
+	 * container. Note that we can't implement properly for database backed container like this so it is unsupported.
+	 */
+	@Override
+	public Object addItemAfter(Object previousEntityId) throws UnsupportedOperationException
+	{
+		logger.executionTrace();
+
 		throw new UnsupportedOperationException();
 	}
 
-	public Item addItemAfter(Object previousItemId, Object newItemId) throws UnsupportedOperationException {
-		// can't implement properly for database backed container like this
+	/**
+	 * Adds a new item after the given item. Adding an item after null item adds the item as first item of the ordered
+	 * container. Note that we can't implement properly for database backed container like this so it is unsupported.
+	 */
+	@Override
+	public Item addItemAfter(Object previousEntityId, Object newEntityId) throws UnsupportedOperationException
+	{
+		logger.executionTrace();
+
 		throw new UnsupportedOperationException();
 	}
 
 	/**
-	 * Gets a base listing using current orders etc.
-	 * 
-	 * @return criteria with current Order criterias added
+	 * Gets the ID of the first Item in the Container.
 	 */
-	protected Criteria getCriteria() {
-		Criteria criteria = getBaseCriteria();
-			List<Order> orders = getOrder(!normalOrder);
-			for (Order order : orders) {
-				criteria.addOrder(order);
-			}
-		return criteria;
-	}
+	@Override
+	public Object firstItemId()
+	{
+		logger.executionTrace();
 
-	/**
-	 * Return the ordering criteria in the order in which they should be
-	 * applied. The composed order must be stable and must include
-	 * {@link #getNaturalOrder(boolean)} at the end.
-	 * 
-	 * @param flipOrder
-	 *            reverse the order if true
-	 * @return List<Order> orders to apply, first item has the highest priority
-	 */
-	protected final List<Order> getOrder(boolean flipOrder) {
-		List<Order> orders = new ArrayList<Order>();
+		final Object firstPojo = getCriteria()
+				.setMaxResults(1)
+				.setCacheable(true)
+				.uniqueResult();
 
-		// standard sort order set by the user by property
-		orders.addAll(getDefaultOrder(flipOrder));
+		firstId = getIdForPojo(firstPojo);
+		idToIndex.put(firstId, normalOrder ? 0 : size() - 1);
 
-		// natural order
-		orders.add(getNaturalOrder(flipOrder));
-
-		return orders;
-	}
-
-	/**
-	 * Returns the ordering to use for the container contents. The default
-	 * implementation provides the {@link Container.Sortable} functionality.
-	 * 
-	 * Can be overridden to customize item sort order.
-	 * 
-	 * @param flipOrder
-	 *            reverse the order if true
-	 * @return List<Order> orders to apply, first item has the highest priority
-	 */
-	protected List<Order> getDefaultOrder(boolean flipOrder) {
-		List<Order> orders = new ArrayList<Order>();
-		if (orderPropertyIds != null) {
-			for (int i = 0; i < orderPropertyIds.length; i++) {
-				String orderPropertyId = orderPropertyIds[i].toString();
-				if (propertyInEmbeddedKey(orderPropertyId)) {
-					String idName = getClassMetadata().getIdentifierPropertyName();
-					orderPropertyId = idName + "." + orderPropertyId;
-				}
-				boolean a = flipOrder ? !orderAscendings[i] : orderAscendings[i];
-				if (a) {
-					orders.add(Order.asc(orderPropertyId));
-				} else {
-					orders.add(Order.desc(orderPropertyId));
-				}
-			}
-		}
-		return orders;
-	}
-
-	/**
-	 * This method is meant to be called by HbnContainer itself. It will create
-	 * the base criteria for entity class and add possible restrictions to
-	 * query. This method is protected so developers can add their own custom
-	 * criterias.
-	 * 
-	 * @return
-	 */
-	protected Criteria getBaseCriteria() {
-		Criteria criteria = sessionManager.getSession().createCriteria(type);
-		// if container is filtered via Container.Filterable API
-		if (filters != null) {
-			for (ContainerFilter filter : filters) {
-				// convert ContainerFilters to hibernate Restriction Criterias
-				String filterPropertyName = filter.propertyId.toString();
-				if (propertyInEmbeddedKey(filterPropertyName)) {
-					String idName = getClassMetadata().getIdentifierPropertyName();
-					filterPropertyName = idName + "." + filterPropertyName;
-				}
-				
-				if (filter.ignoreCase) {
-					criteria = criteria.add(Restrictions.ilike(filterPropertyName, filter.filterString, filter.onlyMatchPrefix ? MatchMode.START : MatchMode.ANYWHERE));
-				} else {
-					criteria = criteria.add(Restrictions.like(filterPropertyName, filter.filterString, filter.onlyMatchPrefix ? MatchMode.START : MatchMode.ANYWHERE));
-				}
-			}
-		}
-		return criteria;
-	}
-
-	/**
-	 * Natural order is the order in which the database is sorted if container
-	 * has no other ordering set. Natural order is always added as least
-	 * significant order to queries. This is needed to keep items stable order
-	 * across queries.
-	 * <p>
-	 * The default implementation sorts entities by identifier column.
-	 * 
-	 * @param flipOrder
-	 * @return
-	 */
-	protected Order getNaturalOrder(boolean flipOrder) {
-		if (flipOrder) {
-			return Order.desc(getIdPropertyName());
-		} else {
-			return Order.asc(getIdPropertyName());
-		}
-	}
-
-	public Object firstItemId() {
-		if (firstId == null) {
-			// firstId was not cached, query the first item from db
-			firstId = firstItemId(true);
-		}
 		return firstId;
 	}
 
 	/**
-	 * Internanal helper method to implement {@link #firstItemId()} and
-	 * {@link #lastItemId()}.
+	 * Tests if the Item corresponding to the given Item ID is the first Item in the Container.
 	 */
-	protected Object firstItemId(boolean byPassCache) {
-		if (byPassCache) {
-			T first = (T) getCriteria().setMaxResults(1).setCacheable(true).uniqueResult();
-			Object id = getIdForPojo(first);
-			idToIndex.put(id, normalOrder ? 0 : size() - 1);
-			return id;
-		} else {
-			return firstItemId();
-		}
+	@Override
+	public boolean isFirstId(Object entityId)
+	{
+		logger.executionTrace();
+		return entityId.equals(firstItemId());
 	}
 
 	/**
-	 * Helper method to detect identifier of given entity object.
-	 * 
-	 * @param pojo
-	 *            the entity object which identifier is to be resolved
-	 * @return the identifier if the given Hibernate entity object
+	 * Tests if the Item corresponding to the given Item ID is the last Item in the Container.
 	 */
-	protected Object getIdForPojo(Object pojo) {
-		return getClassMetadata().getIdentifier(pojo, EntityMode.POJO);
+	@Override
+	public boolean isLastId(Object entityId)
+	{
+		logger.executionTrace();
+		return entityId.equals(lastItemId());
 	}
 
-	public boolean isFirstId(Object itemId) {
-		return itemId.equals(firstItemId());
-	}
+	/**
+	 * Gets the ID of the last Item in the Container.
+	 */
+	@Override
+	public Object lastItemId()
+	{
+		logger.executionTrace();
 
-	public boolean isLastId(Object itemId) {
-		return itemId == null || itemId.equals(lastItemId());
-	}
-
-	public Object lastItemId() {
-		if (lastId == null) {
+		if (lastId == null)
+		{
 			normalOrder = !normalOrder;
-			lastId = firstItemId(true);
+			lastId = firstItemId();
 			normalOrder = !normalOrder;
 		}
+
 		return lastId;
 	}
 
-	/*
-	 * Simple method, but lot's of code :-)
+	/**
+	 * Gets the ID of the Item following the Item that corresponds to entityId. If the given Item is the last or not
+	 * found in the Container, null is returned.
 	 * 
-	 * Rather complicated logic is needed to avoid:
+	 * This is a simple method but it contains a lot of code. The complicated logic is needed to avoid:
 	 * 
-	 * 1. large number of db queries
-	 * 
-	 * 2. scrolling through whole query result
+	 * - a large number of database queries - scrolling through a large query result
 	 * 
 	 * This way this container can be used with large data sets.
 	 */
-	public Object nextItemId(Object itemId) {
-		// TO DO: should not call if know that next exists based on cache, would
-		// optimize one query in some situations
-		/*if (isLastId(itemId)) {
+	@Override
+	public Object nextItemId(Object entityId)
+	{
+		logger.executionTrace();
+
+		EntityItem<T> entity = null;
+		List<T> rowBuffer = null;
+
+		try
+		{
+			entity = cache.get(entityId);
+			rowBuffer = getRowBuffer();
+		}
+		catch (Exception e)
+		{
+			logger.error(e);
 			return null;
-		}*/
-
-		EntityItem<T> item = new EntityItem<T>((Serializable) itemId);
-
-		// check if next itemId is in current buffer
-		List<T> buffer = getRowBuffer();
-		try {
-			int curBufIndex = buffer.indexOf(item.getPojo());
-			if (curBufIndex != -1) {
-				T object = buffer.get(curBufIndex + 1);
-				return getIdForPojo(object);
-			}
-		} catch (Exception e) {
-			// not in buffer
 		}
 
-		// itemId was not in buffer
-		// build query with current order and limiting result set with the
-		// reference row. Then first result is next item.
+		try
+		{
+			int index;
+			if ((index = rowBuffer.indexOf(entity.getPojo())) != -1)
+			{
+				final T nextEntity = rowBuffer.get(index + 1);
+				return getIdForPojo(nextEntity);
+			}
+		}
+		catch (Exception e) // entityId is not in rowBuffer, suppress the exception
+		{
+		}
 
-		int currentIndex = indexOfId(itemId);
-		int firstIndex = normalOrder ? currentIndex + 1 : size() - currentIndex - 1;
+		int currentIndex = indexOfId(entityId);
+		int size = size();
 
-		Criteria crit = getCriteria();
-		crit = crit.setFirstResult(firstIndex).setMaxResults(ROW_BUF_SIZE);
-		List<T> newBuffer = crit.list();
-		if (newBuffer.size() > 0) {
-			// save buffer to optimize query count
-			setRowBuffer(newBuffer, firstIndex);
-			T nextPojo = newBuffer.get(0);
+		int firstIndex = (normalOrder)
+				? currentIndex + 1
+				: size - currentIndex;
+
+		if (firstIndex < 0 || firstIndex >= size)
+			return null;
+
+		final Criteria criteria = getCriteria()
+				.setFirstResult(firstIndex)
+				.setMaxResults(ROW_BUF_SIZE);
+
+		@SuppressWarnings("unchecked")
+		final List<T> newRowBuffer = criteria.list();
+
+		if (newRowBuffer.size() > 0)
+		{
+			setRowBuffer(newRowBuffer, firstIndex);
+			final T nextPojo = newRowBuffer.get(0);
 			return getIdForPojo(nextPojo);
-		} else {
-			return null;
 		}
+
+		return null;
 	}
 
 	/**
-	 * RowBuffer stores a list of entity items to avoid excessive number of DB
-	 * queries.
-	 * 
-	 * @return
+	 * Gets the ID of the Item preceding the Item that corresponds to entityId. If the given Item is the first or not
+	 * found in the Container, null is returned.
 	 */
-	private List<T> getRowBuffer() {
-		if (normalOrder) {
-			return ascRowBuffer;
-		} else {
-			return descRowBuffer;
-		}
-	}
+	@Override
+	public Object prevItemId(Object entityId)
+	{
+		logger.executionTrace();
 
-	/**
-	 * RowBuffer stores some pojos to avoid excessive number of DB queries.
-	 * 
-	 * Also updates the idToIndex map.
-	 */
-	private void setRowBuffer(List<T> list, int firstIndex) {
-		if (normalOrder) {
-			ascRowBuffer = list;
-			for (int i = 0; i < list.size(); ++i) {
-				idToIndex.put(getIdForPojo(list.get(i)), firstIndex + i);
-			}
-		} else {
-			descRowBuffer = list;
-			int lastIndex = size() - 1;
-			for (int i = 0; i < list.size(); ++i) {
-				idToIndex.put(getIdForPojo(list.get(i)), lastIndex - firstIndex - i);
-			}
-		}
-	}
-
-	/**
-	 * @return column name of identifier property
-	 */
-	private String getIdPropertyName() {
-		return getClassMetadata().getIdentifierPropertyName();
-	}
-
-	public Object prevItemId(Object itemId) {
-		// temp flip order and use nextItemId implementation
 		normalOrder = !normalOrder;
-		Object prev = nextItemId(itemId);
+		Object previous = nextItemId(entityId);
 		normalOrder = !normalOrder;
-		return prev;
+		return previous;
 	}
 
-	// Container.Indexed
-
 	/**
-	 * Not supported in HbnContainer. Indexing/order is controlled by
-	 * underlaying database.
+	 * Not supported in HbnContainer. Indexing/order is controlled by underlying database.
 	 */
-	public Object addItemAt(int index) throws UnsupportedOperationException {
+	@Override
+	public Object addItemAt(int index) throws UnsupportedOperationException
+	{
 		throw new UnsupportedOperationException();
 	}
 
 	/**
-	 * Not supported in HbnContainer. Indexing/order is controlled by
-	 * underlaying database.
+	 * Not supported in HbnContainer. Indexing/order is controlled by underlying database.
 	 */
-	public Item addItemAt(int index, Object newItemId) throws UnsupportedOperationException {
+	@Override
+	public Item addItemAt(int index, Object newEntityId) throws UnsupportedOperationException
+	{
 		throw new UnsupportedOperationException();
 	}
 
-	public Object getIdByIndex(int index) {
-		if (indexRowBuffer == null) {
+	/**
+	 * Get the item id for the item at the position given by index.
+	 */
+	@Override
+	public Object getIdByIndex(int index)
+	{
+		logger.executionTrace();
+
+		if (indexRowBuffer == null)
 			resetIndexRowBuffer(index);
-		}
+
 		int indexInCache = index - indexRowBufferFirstIndex;
-		if (!(indexInCache >= 0 && indexInCache < indexRowBuffer.size())) {
-			/*
-			 * If requested index is not currently in cache, reset it starting
-			 * from queried index.
-			 */
+
+		if (!(indexInCache >= 0 && indexInCache < indexRowBuffer.size()))
+		{
 			resetIndexRowBuffer(index);
 			indexInCache = 0;
 		}
-		T pojo = indexRowBuffer.get(indexInCache);
-		Object id = getIdForPojo(pojo);
+
+		final T pojo = indexRowBuffer.get(indexInCache);
+		final Object id = getIdForPojo(pojo);
+
 		idToIndex.put(id, new Integer(index));
-		if (idToIndex.size() > ID_TO_INDEX_MAX_SIZE) {
-			// clear one from beginning, if ID_TO_INDEX_MAX_SIZE is total of all
-			// caches, only detached indexes should get removed
+
+		if (idToIndex.size() > ID_TO_INDEX_MAX_SIZE)
 			idToIndex.remove(idToIndex.keySet().iterator().next());
-		}
+
 		return id;
 	}
 
 	/**
-	 * Helper method to query new set of entity items to cache from given index.
+	 * Gets the index of the Item corresponding to the entityId. The following is true for the returned index: 0 <=
+	 * index < size(), or index = -1 if there is no visible item with that id in the container.
 	 * 
-	 * @param index
-	 *            the index of first entity object ot be included in query
+	 * Note! Expects that getIdByIndex is called for this entityId. Otherwise it will be potentially rather slow
+	 * operation with large tables. When used with Table, this shouldn't be a problem.
 	 */
-	private void resetIndexRowBuffer(int index) {
-		indexRowBufferFirstIndex = index;
-		indexRowBuffer = getCriteria().setFirstResult(index).setMaxResults(ROW_BUF_SIZE).list();
+	@Override
+	public int indexOfId(Object entityId)
+	{
+		logger.executionTrace();
+
+		final Integer index = idToIndex.get(entityId);
+
+		return (index == null)
+				? slowIndexOfId(entityId)
+				: index;
 	}
 
-	/*
-	 * Note! Expects that getIdByIndex is called for this itemId. When used with
-	 * Table, this shouldn't be a problem.
-	 * 
-	 * TO DO: make workaround for this. Too bad it is going to be a very slow
-	 * operation (request all IDs from DB in correct order and find the ID in
-	 * the results).
+	/**
+	 * Gets the container property IDs which can be used to sort the items.
 	 */
-	public int indexOfId(Object itemId) {
-		Integer index = idToIndex.get(itemId);
-		return index;
-	}
+	@Override
+	public Collection<String> getSortableContainerPropertyIds()
+	{
+		logger.executionTrace();
 
-	// Container.Sortable methods
+		final String[] propertyNames = classMetadata.getPropertyNames();
+		final LinkedList<String> propertyIds = new LinkedList<String>();
 
-	public Collection<String> getSortableContainerPropertyIds() {
-		// use Hibernates metadata helper to determine property names
-		String[] propertyNames = getClassMetadata().getPropertyNames();
-		LinkedList<String> propertyIds = new LinkedList<String>();
 		propertyIds.addAll(Arrays.asList(propertyNames));
 		propertyIds.addAll(getEmbeddedKeyPropertyIds());
+
 		return propertyIds;
 	}
 
-	public void sort(Object[] propertyId, boolean[] ascending) {
-		// we do not actually sort anything here, just clearing cache will do
-		// the thing lazily.
+	/**
+	 * Sort method. Sorts the container items. Sorting a container can irreversibly change the order of its items or
+	 * only change the order temporarily, depending on the container.
+	 * 
+	 * HbnContainer does not actually sort anything here, just clearing cache will do the thing lazily.
+	 */
+	@Override
+	public void sort(Object[] propertyId, boolean[] ascending)
+	{
+		logger.executionTrace();
+
 		clearInternalCache();
 		orderPropertyIds = propertyId;
 		orderAscendings = ascending;
 	}
 
 	/**
-	 * Helper method to clear all cache fields.
+	 * Remove all active filters from the container.
 	 */
-	protected void clearInternalCache() {
+	@Override
+	public void removeAllContainerFilters()
+	{
+		logger.executionTrace();
+
+		if (filters != null)
+		{
+			filters = null;
+			clearInternalCache();
+			fireItemSetChange();
+		}
+	}
+
+	/**
+	 * HbnContainer only supports old style addContainerFilter(Object, String, boolean booblean) API and
+	 * {@link SimpleStringFilter}. Support for this newer API maybe in upcoming versions.
+	 * 
+	 * Also note that for complex filtering it is possible to override {@link #getBaseCriteria()} method and add filter
+	 * so the query directly.
+	 */
+	// TODO support new filtering api properly
+	@Override
+	public void addContainerFilter(Filter filter) throws UnsupportedFilterException
+	{
+		logger.executionTrace();
+
+		if (!(filter instanceof SimpleStringFilter))
+		{
+			final String message = "HbnContainer only supports old style addContainerFilter(Object, String, boolean booblean) API";
+			throw new UnsupportedFilterException(message);
+		}
+
+		final SimpleStringFilter sf = (SimpleStringFilter) filter;
+		final String filterString = sf.getFilterString();
+		final Object propertyId = sf.getPropertyId();
+		final boolean ignoreCase = sf.isIgnoreCase();
+		final boolean onlyMatchPrefix = sf.isOnlyMatchPrefix();
+
+		addContainerFilter(propertyId, filterString, "", ignoreCase, onlyMatchPrefix); // TODO: empty string?
+	}
+
+	/**
+	 * Finds the identifiers for the children of the given item. The returned collection is unmodifiable.
+	 */
+	@Override
+	public Collection<?> getChildren(Object entityId)
+	{
+		logger.executionTrace();
+
+		final ArrayList<Object> children = new ArrayList<Object>();
+
+		try
+		{
+			parentPropertyName = getParentPropertyName();
+
+			if (parentPropertyName == null)
+				return children;
+
+			for (Object id : getItemIds())
+			{
+				EntityItem<T> entity = cache.get(id);
+				Property<?> property = entity.getItemProperty(parentPropertyName);
+				Object value = property.getValue();
+
+				if (entityId.equals(value))
+					children.add(id);
+			}
+		}
+		catch (Exception e)
+		{
+			logger.error(e);
+		}
+
+		return children;
+	}
+
+	/**
+	 * Gets the identifier of the given item's parent. If there is no parent or we are unable to infer the name of the
+	 * parent property this method will return null.
+	 */
+	@Override
+	public Object getParent(Object entityId)
+	{
+		logger.executionTrace();
+
+		try
+		{
+			parentPropertyName = getParentPropertyName();
+
+			if (parentPropertyName == null)
+			{
+				logger.warn("failed to find a parent property name; hierarchy may be incomplete.");
+				return null;
+			}
+
+			final EntityItem<T> entity = cache.get(entityId);
+			final Property<?> property = entity.getItemProperty(parentPropertyName);
+			final Object value = property.getValue();
+
+			return value;
+		}
+		catch (Exception e)
+		{
+			logger.error(e);
+			return null;
+		}
+	}
+
+	/**
+	 * Gets the IDs of all Items in the container that don't have a parent. Such items are called root Items. The
+	 * returned collection is unmodifiable.
+	 */
+	@Override
+	public Collection<?> rootItemIds()
+	{
+		logger.executionTrace();
+
+		final ArrayList<Object> rootItems = new ArrayList<Object>();
+
+		try
+		{
+			parentPropertyName = getParentPropertyName();
+
+			if (parentPropertyName == null)
+			{
+				logger.warn("failed to find a parent property name; hierarchy may be incomplete.");
+				return rootItems;
+			}
+
+			final Collection<?> allItemIds = getItemIds();
+
+			for (Object id : allItemIds)
+			{
+				EntityItem<T> entity = cache.get(id);
+				Property<?> property = entity.getItemProperty(parentPropertyName);
+				Object value = property.getValue();
+
+				if (value == null)
+					rootItems.add(id);
+			}
+		}
+		catch (Exception e)
+		{
+			logger.error(e);
+		}
+
+		return rootItems;
+	}
+
+	/**
+	 * Sets the parent of an Item. The new parent item must exist and be able to have children. (
+	 * areChildrenAllowed(Object) == true ). It is also possible to detach a node from the hierarchy (and thus make it
+	 * root) by setting the parent null. This operation is optional.
+	 */
+	@SuppressWarnings({ "unchecked", "rawtypes" })
+	@Override
+	public boolean setParent(Object entityId, Object newParentId)
+	{
+		logger.executionTrace();
+
+		try
+		{
+			parentPropertyName = getParentPropertyName();
+
+			if (parentPropertyName == null)
+			{
+				logger.warn("failed to find a parent property name; unable to set the parent.");
+				return false;
+			}
+
+			final EntityItem<T> item = cache.get(entityId);
+			final Property property = item.getItemProperty(parentPropertyName);
+
+			property.setValue(newParentId);
+			final Object value = property.getValue();
+
+			return (value.equals(newParentId));
+		}
+		catch (Exception e)
+		{
+			logger.error(e);
+			return false;
+		}
+	}
+
+	/**
+	 * Tests if the Item with given ID can have children.
+	 */
+	@Override
+	public boolean areChildrenAllowed(Object entityId)
+	{
+		logger.executionTrace();
+
+		if ((parentPropertyName = getParentPropertyName()) != null)
+			return containsId(entityId);
+
+		return false;
+	}
+
+	/**
+	 * Sets the given Item's capability to have children. If the Item identified with entityId already has children and
+	 * areChildrenAllowed(Object) is false this method fails and false is returned.
+	 * 
+	 * The children must be first explicitly removed with setParent(Object entityId, Object newParentId)or
+	 * com.vaadin.data.Container.removeItem(Object entityId).
+	 * 
+	 * This operation is optional. If it is not implemented, the method always returns false.
+	 */
+	@Override
+	public boolean setChildrenAllowed(Object entityId, boolean areChildrenAllowed)
+	{
+		logger.executionTrace();
+
+		return false;
+	}
+
+	/**
+	 * Tests if the Item specified with entityId is a root Item. The hierarchical container can have more than one root
+	 * and must have at least one unless it is empty. The getParent(Object entityId) method always returns null for root
+	 * Items.
+	 */
+	@Override
+	public boolean isRoot(Object entityId)
+	{
+		logger.executionTrace();
+
+		try
+		{
+			parentPropertyName = getParentPropertyName();
+
+			if (parentPropertyName == null)
+			{
+				logger.warn("failed to find a parent property name; hierarchy may be incomplete.");
+				return false;
+			}
+
+			final EntityItem<T> item = cache.get(entityId);
+			final Property<?> property = item.getItemProperty(parentPropertyName);
+			final Object value = property.getValue();
+
+			return (value == null);
+		}
+		catch (Exception e)
+		{
+			logger.error(e);
+			return false;
+		}
+	}
+
+	/**
+	 * Tests if the Item specified with entityId has child Items or if it is a leaf. The getChildren(Object entityId)
+	 * method always returns null for leaf Items.
+	 * 
+	 * Note that being a leaf does not imply whether or not an Item is allowed to have children.
+	 */
+	@Override
+	public boolean hasChildren(Object entityId)
+	{
+		logger.executionTrace();
+
+		try
+		{
+			parentPropertyName = getParentPropertyName();
+
+			if (parentPropertyName == null)
+			{
+				logger.warn("failed to find a parent property name; hierarchy may be incomplete.");
+				return false;
+			}
+
+			for (Object id : getItemIds())
+			{
+				EntityItem<T> item = cache.get(id);
+				Property<?> property = item.getItemProperty(parentPropertyName);
+				Object value = property.getValue();
+
+				if (entityId.equals(value))
+					return true;
+			}
+
+			return false;
+		}
+		catch (Exception e)
+		{
+			logger.error(e);
+			return false;
+		}
+	}
+
+	/**
+	 * Adds an Item set change listener for the object.
+	 */
+	@Override
+	public void addItemSetChangeListener(ItemSetChangeListener listener)
+	{
+		logger.executionTrace();
+
+		if (itemSetChangeListeners == null)
+			itemSetChangeListeners = new LinkedList<ItemSetChangeListener>();
+
+		itemSetChangeListeners.add(listener);
+	}
+
+	/**
+	 * Removes the Item set change listener from the object.
+	 */
+	@Override
+	public void removeItemSetChangeListener(ItemSetChangeListener listener)
+	{
+		logger.executionTrace();
+		
+		if (itemSetChangeListeners != null)
+			itemSetChangeListeners.remove(listener);
+	}
+
+	/**
+	 * Adds an Item set change listener for the object. This method is deprecated. You should use
+	 * addItemSetChangeListener() instead.
+	 */
+	@Override
+	@Deprecated
+	public void addListener(ItemSetChangeListener listener)
+	{
+		logger.executionTrace();
+		addItemSetChangeListener(listener);
+	}
+
+	/**
+	 * Removes the Item set change listener from the object. This method is deprecated. You should use
+	 * addItemSetChangeListener() instead.
+	 */
+	@Override
+	@Deprecated
+	public void removeListener(ItemSetChangeListener listener)
+	{
+		logger.executionTrace();
+		removeItemSetChangeListener(listener);
+	}
+
+	//
+	// UTILITY METHODS
+	//
+
+	/**
+	 * This method was added mainly to allow unit tests to be written to cover the filter add/remove methods.
+	 */
+	public Set<Filter> getContainerFilters()
+	{
+		return null; // return filters!
+	}
+
+	/**
+	 * This method was added mainly to allow unit tests to be written to cover the listener add/remove methods.
+	 */
+	public List<ItemSetChangeListener> getItemSetChangeListeners()
+	{
+		return itemSetChangeListeners;
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method. Determines if a property is contained within an embedded key.
+	 */
+	protected boolean propertyInEmbeddedKey(Object propertyId)
+	{
+		logger.executionTrace();
+
+		if (embeddedPropertiesCache.containsKey(propertyId))
+			return embeddedPropertiesCache.get(propertyId);
+
+		final Type identifierType = classMetadata.getIdentifierType();
+
+		if (identifierType.isComponentType())
+		{
+			final ComponentType componentType = (ComponentType) identifierType;
+			final String[] idPropertyNames = componentType.getPropertyNames();
+			final List<String> idPropertyNameList = Arrays.asList(idPropertyNames);
+			return idPropertyNameList.contains(propertyId);
+		}
+
+		return false;
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method. This method triggers events associated with the
+	 * ItemSetChangeListener.
+	 */
+	protected void fireItemSetChange()
+	{
+		logger.executionTrace();
+
+		if (itemSetChangeListeners != null)
+		{
+			final Object[] changeListeners = itemSetChangeListeners.toArray();
+
+			final Container.ItemSetChangeEvent changeEvent = new Container.ItemSetChangeEvent()
+			{
+				protected static final long serialVersionUID = -3002746333251784195L;
+
+				public Container getContainer()
+				{
+					return CustomHbnContainer.this;
+				}
+			};
+
+			for (int i = 0; i < changeListeners.length; i++)
+			{
+				ItemSetChangeListener changeListener = (ItemSetChangeListener) changeListeners[i];
+				changeListener.containerItemSetChange(changeEvent);
+			}
+		}
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method. Gets a base listing using current ordering criteria.
+	 */
+	protected Criteria getCriteria()
+	{
+		logger.executionTrace();
+
+		final Criteria criteria = getBaseCriteria();
+		final List<Order> orders = getOrder(!normalOrder);
+
+		for (Order order : orders)
+		{
+			criteria.addOrder(order);
+		}
+
+		return criteria;
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method. Return the ordering criteria in the order in which they should
+	 * be applied. The composed order must be stable and must include {@link #getNaturalOrder(boolean)} at the end.
+	 */
+	protected final List<Order> getOrder(boolean flipOrder)
+	{
+		logger.executionTrace();
+
+		final List<Order> orders = new ArrayList<Order>();
+		orders.addAll(getDefaultOrder(flipOrder));
+		orders.add(getNaturalOrder(flipOrder));
+		return orders;
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method. Returns the ordering to use for the container contents. The
+	 * default implementation provides the {@link Container.Sortable} functionality. Can be overridden to customize item
+	 * sort order.
+	 */
+	protected List<Order> getDefaultOrder(boolean flipOrder)
+	{
+		logger.executionTrace();
+
+		final List<Order> orders = new ArrayList<Order>();
+
+		if (orderPropertyIds != null)
+		{
+			for (int i = 0; i < orderPropertyIds.length; i++)
+			{
+				String propertyId = orderPropertyIds[i].toString();
+
+				if (propertyInEmbeddedKey(propertyId))
+					propertyId = classMetadata.getIdentifierPropertyName() + "." + propertyId;
+
+				boolean ascending = (flipOrder)
+						? !orderAscendings[i]
+						: orderAscendings[i];
+
+				Order order = (ascending)
+						? Order.asc(propertyId)
+						: Order.desc(propertyId);
+
+				orders.add(order);
+			}
+		}
+
+		return orders;
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method. Creates the base criteria for entity class and add possible
+	 * restrictions to query. This method is protected so developers can add their own custom criteria.
+	 */
+	protected Criteria getBaseCriteria()
+	{
+		logger.executionTrace();
+
+		final Session session = sessionFactory.getCurrentSession();
+		Criteria criteria = session.createCriteria(entityType);
+
+		if (filters != null)
+		{
+			for (ContainerFilter filter : filters)
+			{
+				String idName = null;
+
+				if (propertyInEmbeddedKey(filter.getPropertyId()))
+					idName = classMetadata.getIdentifierPropertyName();
+
+				criteria = criteria.add(filter.getCriterion(idName));
+			}
+		}
+
+		return criteria;
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method. Natural order is the order in which the database is sorted if
+	 * container has no other ordering set. Natural order is always added as least significant order to queries. This is
+	 * needed to keep items stable order across queries. The default implementation sorts entities by identifier column.
+	 */
+	protected Order getNaturalOrder(boolean flipOrder)
+	{
+		logger.executionTrace();
+
+		final String propertyName = getIdPropertyName();
+
+		return (flipOrder)
+				? Order.desc(propertyName)
+				: Order.asc(propertyName);
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method to detect identifier of given entity object.
+	 */
+	protected Object getIdForPojo(Object pojo)
+	{
+		logger.executionTrace();
+
+		final Session session = sessionFactory.getCurrentSession();
+		return classMetadata.getIdentifier(pojo, (SessionImplementor) session);
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method. RowBuffer stores a list of entity items to avoid excessive
+	 * number of DB queries.
+	 */
+	protected List<T> getRowBuffer()
+	{
+		logger.executionTrace();
+
+		return (normalOrder) ? ascRowBuffer : descRowBuffer;
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method. RowBuffer stores some pojos to avoid excessive number of DB
+	 * queries. Also updates the idToIndex map.
+	 */
+	protected void setRowBuffer(List<T> list, int firstIndex)
+	{
+		logger.executionTrace();
+
+		if (normalOrder)
+		{
+			ascRowBuffer = list;
+
+			for (int i = 0; i < list.size(); ++i)
+			{
+				idToIndex.put(getIdForPojo(list.get(i)), firstIndex + i);
+			}
+		}
+		else
+		{
+			descRowBuffer = list;
+			final int lastIndex = size() - 1;
+
+			for (int i = 0; i < list.size(); ++i)
+			{
+				idToIndex.put(getIdForPojo(list.get(i)), lastIndex - firstIndex - i);
+			}
+		}
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method that gets the property name of the identifier.
+	 */
+	protected String getIdPropertyName()
+	{
+		logger.executionTrace();
+
+		return classMetadata.getIdentifierPropertyName();
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method to query new set of entity items to cache from given index.
+	 */
+	@SuppressWarnings("unchecked")
+	protected void resetIndexRowBuffer(int index)
+	{
+		logger.executionTrace();
+
+		indexRowBufferFirstIndex = index;
+		indexRowBuffer = getCriteria().setFirstResult(index).setMaxResults(ROW_BUF_SIZE).list();
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method that gets the index of the given identifier.
+	 */
+	protected int slowIndexOfId(Object entityId)
+	{
+		logger.executionTrace();
+
+		final Criteria criteria = getCriteria().setProjection(Projections.id());
+		final List<?> list = criteria.list();
+		return list.indexOf(entityId);
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method. Adds container filter for hibernate mapped property. For
+	 * property not mapped by Hibernate.
+	 */
+	public void addContainerFilter(Object propertyId, String filterString, String filterString2, boolean ignoreCase, boolean onlyMatchPrefix)
+	{
+		logger.executionTrace();
+
+		addContainerFilter(new StringContainerFilter(propertyId, filterString, filterString2, ignoreCase, onlyMatchPrefix));
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method that adds a container filter.
+	 */
+	public void addContainerFilter(ContainerFilter containerFilter)
+	{
+		logger.executionTrace();
+
+		if (addedProperties.containsKey(containerFilter.getPropertyId()))
+		{
+			final String message = "HbnContainer does not support filtering properties not mapped by Hibernate";
+			throw new UnsupportedOperationException(message);
+		}
+
+		if (filters == null)
+			filters = new HashSet<ContainerFilter>();
+
+		filters.add(containerFilter);
+
+		clearInternalCache();
+		fireItemSetChange();
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method that removes container filters for the given property identifier.
+	 */
+	public void removeContainerFilters(Object propertyId)
+	{
+		logger.executionTrace();
+
+		if (filters != null)
+		{
+			for (Iterator<ContainerFilter> iterator = filters.iterator(); iterator.hasNext();)
+			{
+				ContainerFilter containerFilter = iterator.next();
+
+				if (containerFilter.getPropertyId().equals(propertyId))
+					iterator.remove();
+			}
+
+			clearInternalCache();
+			fireItemSetChange();
+		}
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method that removes the given container filter.
+	 */
+	@Override
+	public void removeContainerFilter(Filter filter)
+	{
+		logger.executionTrace();
+
+		// TODO support new filtering api properly
+		// TODO the workaround for SimpleStringFilter works wrong, but hopefully will be good enough for now
+
+		if (filter instanceof SimpleStringFilter)
+		{
+			final SimpleStringFilter sf = (SimpleStringFilter) filter;
+			final Object propertyId = sf.getPropertyId();
+			removeContainerFilters(propertyId);
+		}
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method that infers the name of the parent field belonging to the current
+	 * property based on type.
+	 */
+	protected String getParentPropertyName()
+	{
+		logger.executionTrace();
+
+		// TODO: make this a little more robust, there are a number of cases where this will fail.
+
+		if (parentPropertyName == null)
+		{
+			String[] propertyNames = classMetadata.getPropertyNames();
+
+			for (int i = 0; i < propertyNames.length; ++i)
+			{
+				String entityTypeName = entityType.getName();
+				String propertyTypeName = classMetadata.getPropertyType(propertyNames[i]).getName();
+
+				if (entityTypeName.equals(propertyTypeName))
+				{
+					parentPropertyName = propertyNames[i];
+					break;
+				}
+			}
+		}
+
+		return parentPropertyName;
+	}
+
+	/**
+	 * This is an internal HbnContainer utility method to clear all cache fields.
+	 */
+	protected void clearInternalCache()
+	{
+		logger.executionTrace();
+
 		idToIndex.clear();
 		indexRowBuffer = null;
 		ascRowBuffer = null;
@@ -1310,85 +2061,6 @@ public class CustomHbnContainer<T> implements Container.Indexed, Container.Sorta
 		firstId = null;
 		lastId = null;
 		size = null;
+		embeddedPropertiesCache.clear();
 	}
-
-	/**
-	 * Helper class to contain filtering data from Container.Filterable
-	 */
-	class ContainerFilter {
-
-		protected final Object propertyId;
-		protected final String filterString;
-		protected final boolean onlyMatchPrefix;
-		protected final boolean ignoreCase;
-		protected final String filterString2;
-
-		public ContainerFilter(Object propertyId, String filterString, String filterString2, boolean ignoreCase, boolean onlyMatchPrefix) {
-			this.propertyId = propertyId;
-			this.ignoreCase = ignoreCase;
-			this.filterString2 = filterString2;
-			this.filterString = ignoreCase ? filterString.toLowerCase() : filterString;
-			this.onlyMatchPrefix = onlyMatchPrefix;
-		}
-
-	}
-
-	public void addContainerFilter(Object propertyId, String filterString, boolean ignoreCase, boolean onlyMatchPrefix) {
-		addContainerFilter(propertyId, filterString, null, ignoreCase, onlyMatchPrefix);
-	}
-	
-	
-	/**
-	 * Adds container filter for hibernate mapped property. For property not
-	 * mapped by Hibernate, {@link UnsupportedOperationException} is thrown.
-	 * 
-	 * @see Container.Filterable#addContainerFilter(Object, String, boolean,
-	 *      boolean)
-	 */
-	public void addContainerFilter(Object propertyId, String filterString, String filterString2, boolean ignoreCase, boolean onlyMatchPrefix) {
-		if (addedProperties.containsKey(propertyId)) {
-			throw new UnsupportedOperationException(
-					"HbnContainer does not support filterig properties not mapped by Hibernate");
-		} else {
-			if (filters == null) {
-				filters = new HashSet<ContainerFilter>();
-			}
-			ContainerFilter f = new ContainerFilter(propertyId, filterString, filterString2, ignoreCase, onlyMatchPrefix);
-			filters.add(f);
-			clearInternalCache();
-			fireItemSetChange();
-		}
-	}
-
-	public void removeAllContainerFilters() {
-		if (filters != null) {
-			filters = null;
-			clearInternalCache();
-			fireItemSetChange();
-		}
-	}
-
-	public void removeContainerFilters(Object propertyId) {
-		if (filters != null) {
-			for (Iterator<ContainerFilter> iterator = filters.iterator(); iterator.hasNext();) {
-				ContainerFilter f = iterator.next();
-				if (f.propertyId.equals(propertyId)) {
-					iterator.remove();
-				}
-			}
-			clearInternalCache();
-			fireItemSetChange();
-		}
-	}
-
-	@Override
-	public void addContainerFilter(Filter filter) throws UnsupportedFilterException {
-		throw new UnsupportedOperationException();
-	}
-
-	@Override
-	public void removeContainerFilter(Filter filter) {
-		throw new UnsupportedOperationException();
-	}
-
 }

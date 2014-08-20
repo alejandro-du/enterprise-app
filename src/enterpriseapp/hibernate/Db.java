@@ -9,6 +9,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
@@ -25,9 +26,12 @@ import org.hibernate.Interceptor;
 import org.hibernate.Session;
 import org.hibernate.SessionFactory;
 import org.hibernate.cfg.Configuration;
+import org.hibernate.internal.SessionImpl;
 import org.hibernate.metadata.ClassMetadata;
 import org.hibernate.persister.collection.AbstractCollectionPersister;
 import org.hibernate.persister.entity.AbstractEntityPersister;
+import org.hibernate.service.ServiceRegistry;
+import org.hibernate.service.ServiceRegistryBuilder;
 import org.jasypt.util.binary.BasicBinaryEncryptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -119,7 +123,7 @@ public class Db {
 			configuration.setProperty("hibernate.c3p0.timeout", Constants.dbPoolTimeout());
 			configuration.setProperty("hibernate.c3p0.max_statements", Constants.dbMaxStatements());
 			configuration.setProperty("hibernate.c3p0.validationQuery", Constants.dbPoolValidationQuery());
-			configuration.setProperty("hibernate.current_session_context_class", "org.hibernate.context.ThreadLocalSessionContext");
+			configuration.setProperty("hibernate.current_session_context_class", "org.hibernate.context.internal.ThreadLocalSessionContext");
 			
 			if(Constants.dbInterceptor() != null) {
 				Interceptor interceptor = (Interceptor) Class.forName(Constants.dbInterceptor()).newInstance();
@@ -132,7 +136,13 @@ public class Db {
 				configuration.addResource(mappingFiles[i]);
 			}
 			
-			SessionFactory sessionFactory = configuration.configure().buildSessionFactory();
+			configuration.configure();
+			
+			ServiceRegistryBuilder serviceRegistryBuilder = new ServiceRegistryBuilder();
+
+			ServiceRegistry serviceRegistry = serviceRegistryBuilder.applySettings(configuration.getProperties()).buildServiceRegistry();
+			
+			SessionFactory sessionFactory = configuration.buildSessionFactory(serviceRegistry);
 			
 			sessionFactoryList.add(sessionFactory);
 			
@@ -215,7 +225,7 @@ public class Db {
 		
 		return new ArrayList<String>(tables);
 	}
-
+	
 	/**
 	 * Creates a database backup file.
 	 * @param fileName Databse backup file name.
@@ -224,7 +234,6 @@ public class Db {
 	 * @return Database backup file.
 	 * @throws Exception
 	 */
-	@SuppressWarnings("deprecation")
 	public static File newBackup(String fileName, String directory, String password) throws Exception {
 		List<String> tables = getAllTableNames();
 		String tablesLock = "";
@@ -252,7 +261,10 @@ public class Db {
 			
 			try {
 				getCurrentSession().beginTransaction();
-				statement = getCurrentSession().connection().createStatement();
+				
+				Connection connection = ((SessionImpl)getCurrentSession()).connection();
+				
+				statement = connection.createStatement();
 				statement.execute("LOCK TABLES " + tablesLock);
 				
 				statement.execute("FLUSH TABLES " + tablesFlush);
@@ -320,7 +332,6 @@ public class Db {
 	 * @param password Encryption password.
 	 * @throws Exception
 	 */
-	@SuppressWarnings("deprecation")
 	public static void restoreBackup(File file, String password) throws Exception {
 		List<String> tables = getAllTableNames();
 		String path = file.getPath() + "-extracted/";
@@ -329,7 +340,8 @@ public class Db {
 		Statement statement = null;
 		
 		try {
-			statement = getCurrentSession().connection().createStatement();
+			Connection connection = ((SessionImpl)getCurrentSession()).connection();
+			statement = connection.createStatement();
 		} catch (HibernateException e) {
 			throw new RuntimeException(e);
 		} catch (SQLException e) {
@@ -531,6 +543,14 @@ public class Db {
 		}
 		
 		if(-chunks != encryptedLenth) {
+		  if(dos != null) {
+		    dos.close();
+		  }
+		  
+		  if(dis != null) {
+		    dis.close();
+		  }
+		  
 			throw new RuntimeException("Wrong chunk count.");
 		}
 		

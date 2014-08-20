@@ -24,14 +24,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.vaadin.dialogs.ConfirmDialog;
 
-import com.vaadin.Application;
-import com.vaadin.terminal.Terminal;
-import com.vaadin.terminal.gwt.server.WebApplicationContext;
+import com.vaadin.server.ErrorEvent;
+import com.vaadin.server.LegacyApplication;
+import com.vaadin.server.VaadinService;
 import com.vaadin.ui.Component;
 import com.vaadin.ui.ComponentContainer;
 import com.vaadin.ui.DefaultFieldFactory;
 import com.vaadin.ui.Label;
-import com.vaadin.ui.Window;
+import com.vaadin.ui.Notification;
+import com.vaadin.ui.UI;
 
 import enterpriseapp.ui.Constants;
 
@@ -125,23 +126,19 @@ public class Utils {
 	}
 	
 	/**
-	 * Web context path (e.g. "cis/") for the specified Application instance.
-	 * @param application
-	 * @return Web context path.
+	 * @deprecated use VaadinService.getCurrentRequest().getContextPath()
 	 */
-	public static String getWebContextPath(Application application) {
-		WebApplicationContext context = (WebApplicationContext) application.getContext();
-		return context.getHttpSession().getServletContext().getContextPath();
+	@Deprecated
+	public static String getWebContextPath(LegacyApplication application) {
+		return VaadinService.getCurrentRequest().getContextPath();
 	}
 	
 	/**
-	 * Full web context path for the specified Application instance.
-	 * @param application
-	 * @return Full web context path.
+	 * @deprecated use VaadinService.getCurrent().getBaseDirectory().getAbsolutePath()
 	 */
-	public static String getWebContextRealPath(Application application) {
-		WebApplicationContext context = (WebApplicationContext) application.getContext();
-		return context.getHttpSession().getServletContext().getRealPath("");
+	@Deprecated
+	public static String getWebContextRealPath(LegacyApplication application) {
+		return VaadinService.getCurrent().getBaseDirectory().getAbsolutePath();
 	}
 	
 	/**
@@ -174,7 +171,7 @@ public class Utils {
 	 * @param listener You can override "public void onClose(ConfirmDialog dialog)" and use "dialog.isConfirmed()" to check users selection.
 	 */
 	public static void yesNoDialog(Component component, String message, ConfirmDialog.Listener listener) {
-		ConfirmDialog.show(component.getApplication().getMainWindow(), Constants.uiPleaseConfirm, message, Constants.uiYes, Constants.uiNo, listener);
+		ConfirmDialog.show(UI.getCurrent(), Constants.uiPleaseConfirm, message, Constants.uiYes, Constants.uiNo, listener);
 	}
 	
 	/**
@@ -405,13 +402,13 @@ public class Utils {
 	 * @param event
 	 * @param application
 	 */
-	public static void terminalError(Terminal.ErrorEvent event, Application application) {
+	public static void terminalError(ErrorEvent event, LegacyApplication application) {
 		String errorTime = Utils.getCurrentTimeAndDate();
 		logger.error("DefaultApplication Terminal Error (" + errorTime + "):", event.getThrowable());
 		String errorMessage = Constants.uiTerminalErrorMessage + "<br/><i>" + Constants.uiErrorTime + ": " + errorTime + "</i>";
 		
 		if(application.getMainWindow() != null) {
-			application.getMainWindow().showNotification(Constants.uiError, errorMessage, Window.Notification.TYPE_ERROR_MESSAGE);
+			application.getMainWindow().showNotification(Constants.uiError, errorMessage, Notification.TYPE_ERROR_MESSAGE);
 		}
 	}
 	

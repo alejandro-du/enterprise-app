@@ -11,9 +11,12 @@ public class LongValidator extends AbstractStringValidator {
 	}
 
 	@Override
-	protected boolean isValidString(String value) {
+	protected boolean isValidValue(String value) {
         try {
-            Long.parseLong(value);
+        	if(value != null) {
+        		Long.parseLong(value);
+        	}
+        	
             return true;
         } catch (Exception e) {
             return false;

@@ -1,7 +1,7 @@
 package enterpriseapp;
 
 
-import com.vaadin.Application.CustomizedSystemMessages;
+import com.vaadin.server.CustomizedSystemMessages;
 
 import enterpriseapp.ui.Constants;
 

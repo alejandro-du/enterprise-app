@@ -30,6 +30,7 @@ import com.vaadin.ui.Field;
 import com.vaadin.ui.HorizontalLayout;
 import com.vaadin.ui.HorizontalSplitPanel;
 import com.vaadin.ui.Label;
+import com.vaadin.ui.Notification;
 import com.vaadin.ui.Panel;
 import com.vaadin.ui.Table;
 import com.vaadin.ui.Table.ColumnGenerator;
@@ -38,10 +39,10 @@ import com.vaadin.ui.VerticalLayout;
 import com.vaadin.ui.VerticalSplitPanel;
 import com.vaadin.ui.Window;
 import com.vaadin.ui.Window.CloseEvent;
-import com.vaadin.ui.Window.Notification;
 import com.vaadin.ui.themes.ChameleonTheme;
 import com.vaadin.ui.themes.Reindeer;
 
+import enterpriseapp.EnterpriseApplication;
 import enterpriseapp.Utils;
 import enterpriseapp.hibernate.ContainerFactory;
 import enterpriseapp.hibernate.DefaultHbnContainer;
@@ -224,8 +225,12 @@ public class CrudComponent<T extends Dto> extends CustomComponent {
 			form.hideDeleteButton();
 		}
 		
+		VerticalLayout formLayout = new VerticalLayout();
+		formLayout.setMargin(true);
+		formLayout.addComponent(form);
+		
 		Panel formPanel = new Panel();
-		formPanel.addComponent(form);
+		formPanel.setContent(formLayout);
 		formPanel.setStyleName(Reindeer.LAYOUT_BLUE);
 		
 		form.firstButton.setStyleName(Reindeer.BUTTON_SMALL);
@@ -317,7 +322,7 @@ public class CrudComponent<T extends Dto> extends CustomComponent {
 	 * Shows the user the total amount of entityes in the container.
 	 */
 	public void showCount() {
-		getApplication().getMainWindow().showNotification("" + table.getContainerDataSource().size() + " " + Constants.uiMatchesFound);
+		Notification.show("" + table.getContainerDataSource().size() + " " + Constants.uiMatchesFound);
 	}
 	
 	/**
@@ -560,7 +565,7 @@ public class CrudComponent<T extends Dto> extends CustomComponent {
 	public void showImportFromClipboardWindow() {
 		final ImportFromClipboardWindow importWindow = new ImportFromClipboardWindow(type.getSimpleName(), getImportPropertiesLabel(type.getSimpleName()));
 		importWindow.setModal(true);
-		getApplication().getMainWindow().addWindow(importWindow);
+		EnterpriseApplication.getInstance().getMainWindow().addWindow(importWindow);
 		
 		importWindow.addListener(new Window.CloseListener() {
 			private static final long serialVersionUID = 1L;
@@ -637,7 +642,7 @@ public class CrudComponent<T extends Dto> extends CustomComponent {
 	 * @param property Property to get the value for.
 	 * @param field Corresponding form field.
 	 * @param stringValue Value introduced by the user.
-	 * @param lineNumber Line numer being imported.
+	 * @param lineNumber Line number being imported.
 	 * @param line Line being imported.
 	 * @return Value to import.
 	 */
@@ -726,7 +731,7 @@ public class CrudComponent<T extends Dto> extends CustomComponent {
 					String[] values = line.split("\t");
 					
 					if(values.length != shownImportPropertiesCount) {
-						getWindow().showNotification(Constants.uiError, Constants.uiImportFailedWrongColumnCount + " " + lineNumber + " (" + line + ").", Notification.TYPE_ERROR_MESSAGE);
+						Notification.show(Constants.uiError, Constants.uiImportFailedWrongColumnCount + " " + lineNumber + " (" + line + ").", Notification.TYPE_ERROR_MESSAGE);
 						return;
 					}
 					
@@ -768,17 +773,17 @@ public class CrudComponent<T extends Dto> extends CustomComponent {
 					listener.cancelButtonClicked();
 				}
 			} catch (InvalidValueException e) {
-				getWindow().showNotification(Constants.uiError, Constants.uiImportFailed + " " + lineNumber + " (" + line + ")" + (e.getMessage() == null ? "." : ": " + e.getMessage()), Notification.TYPE_ERROR_MESSAGE);
+				Notification.show(Constants.uiError, Constants.uiImportFailed + " " + lineNumber + " (" + line + ")" + (e.getMessage() == null ? "." : ": " + e.getMessage()), Notification.TYPE_ERROR_MESSAGE);
 				return;
 			} catch (Exception e) {
 				logger.error("Error processing value to import." , e);
-				getWindow().showNotification(Constants.uiError, Constants.uiImportFailed + " " + lineNumber + " (" + line + ").", Notification.TYPE_ERROR_MESSAGE);
+				Notification.show(Constants.uiError, Constants.uiImportFailed + " " + lineNumber + " (" + line + ").", Notification.TYPE_ERROR_MESSAGE);
 				return;
 			}
 		}
 		
 		if(showNotification) {
-			getApplication().getMainWindow().showNotification(Constants.uiSaved);
+			Notification.show(Constants.uiSaved);
 		}
 	}
 	
@@ -834,6 +839,10 @@ public class CrudComponent<T extends Dto> extends CustomComponent {
 	 */
 	public AbstractSplitPanel getSplit() {
 		return split;
+	}
+
+	public Class<T> getType() {
+		return type;
 	}
 
 }
